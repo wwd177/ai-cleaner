@@ -1,0 +1,14 @@
+{
+  "TempMinAgeDays": 3,
+  "WorkspaceMinSizeMB": 200,
+  "WorkspaceMinAgeDays": 7,
+  "CustomCodexCacheRoot": "",
+  "ExtraWorkspaceRoots": [
+    "D:\\Workspaces\\codex-workspace"
+  ],
+  "ExtraProtectedSubtrees": [
+    "D:\\Workspaces\\codex-workspace\\important-core-repo"
+  ],
+  "ExtraBackupDirs": [],
+  "WhitelistedPaths": []
+}

@@ -1,0 +1,16 @@
+{
+  "TempRoot": "D:\\AI-Cache\\Codex\\temp",
+  "PackageCacheRoots": [
+    "D:\\AI-Cache\\Codex\\pip",
+    "D:\\AI-Cache\\Codex\\npm",
+    "D:\\AI-Cache\\Codex\\uv"
+  ],
+  "WorkspaceRoots": [
+    "D:\\Workspaces\\codex-workspace"
+  ],
+  "BrowserCacheRoot": "D:\\AI-Cache\\Codex\\browser-cache",
+  "DesktopLogsRoot": "D:\\AI-Cache\\Codex\\desktop-logs",
+  "ExtraProtectedSubtrees": [
+    "D:\\Workspaces\\codex-workspace\\important-core-repo"
+  ]
+}

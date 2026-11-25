@@ -1,0 +1,28 @@
+# .NET / WPF build outputs
+src/bin/
+src/obj/
+publish/
+app/
+app-v*/
+*.exe
+*.dll
+*.pdb
+
+# Local runtime state, logs, reports & user profiles (NEVER commit personal paths!)
+logs/
+reports/
+backups/
+settings.json
+local-profile.json
+scripts/CodexCleaner/config.json
+scripts/CodexCleaner/logs/
+scripts/CodexCleaner/reports/
+
+# IDE & OS
+.vs/
+.vscode/
+*.user
+*.suo
+Thumbs.db
+desktop.ini
+*.bak

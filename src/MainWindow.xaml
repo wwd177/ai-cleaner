@@ -1,0 +1,730 @@
+<Window x:Class="AICleaner.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="AI 清理助手 · Antigravity / GPT / DeepSeek Harness"
+        Width="1260" Height="820" MinWidth="1060" MinHeight="680"
+        WindowStartupLocation="CenterScreen"
+        Background="#EAF3FF"
+        Foreground="{StaticResource InkPrimary}"
+        FontFamily="{StaticResource AppFont}"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display"
+        TextOptions.TextRenderingMode="ClearType"
+        TextOptions.TextHintingMode="Fixed"
+        RenderOptions.ClearTypeHint="Enabled"
+        PreviewKeyDown="Window_PreviewKeyDown"
+        Icon="app.ico">
+
+    <Grid RenderOptions.ClearTypeHint="Enabled">
+        <!-- LAYER 0: Luminous Glacier-White & Sky-Blue Ambient Glass Backdrop -->
+        <Grid.Background>
+            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#F4F9FF" Offset="0"/>
+                <GradientStop Color="#DFEEFF" Offset="0.48"/>
+                <GradientStop Color="#EBF4FF" Offset="1"/>
+            </LinearGradientBrush>
+        </Grid.Background>
+
+        <!-- Ambient Soft Sky/Cobalt/Cyan Refraction Orbs (Cached in VRAM via BitmapCache -> 0ms redraw!) -->
+        <Canvas IsHitTestVisible="False" ClipToBounds="True" CacheMode="BitmapCache">
+            <Ellipse Width="580" Height="580" Canvas.Left="-140" Canvas.Top="-160">
+                <Ellipse.Fill>
+                    <RadialGradientBrush>
+                        <GradientStop Color="#5238BDF8" Offset="0"/>
+                        <GradientStop Color="#1C60A5FA" Offset="0.55"/>
+                        <GradientStop Color="#0038BDF8" Offset="1"/>
+                    </RadialGradientBrush>
+                </Ellipse.Fill>
+            </Ellipse>
+            <Ellipse Width="640" Height="640" Canvas.Left="700" Canvas.Top="-200">
+                <Ellipse.Fill>
+                    <RadialGradientBrush>
+                        <GradientStop Color="#443B82F6" Offset="0"/>
+                        <GradientStop Color="#186366F1" Offset="0.55"/>
+                        <GradientStop Color="#003B82F6" Offset="1"/>
+                    </RadialGradientBrush>
+                </Ellipse.Fill>
+            </Ellipse>
+            <Ellipse Width="600" Height="600" Canvas.Left="320" Canvas.Top="480">
+                <Ellipse.Fill>
+                    <RadialGradientBrush>
+                        <GradientStop Color="#487DD3FC" Offset="0"/>
+                        <GradientStop Color="#1638BDF8" Offset="0.6"/>
+                        <GradientStop Color="#007DD3FC" Offset="1"/>
+                    </RadialGradientBrush>
+                </Ellipse.Fill>
+            </Ellipse>
+        </Canvas>
+
+        <!-- LAYER 1: Main Split Content (ZERO Effects on text ancestors!) -->
+        <Grid RenderOptions.ClearTypeHint="Enabled">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="290"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- LEFT FROSTED GLASS SIDEBAR -->
+            <Border Grid.Column="0" Background="{StaticResource GlassSidebar}"
+                    BorderBrush="#CFE2F8" BorderThickness="0,0,1,0"
+                    RenderOptions.ClearTypeHint="Enabled">
+                <DockPanel LastChildFill="True" Margin="16,18,16,16">
+
+                    <!-- Brand Header -->
+                    <StackPanel DockPanel.Dock="Top" Margin="4,0,4,18">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Image Source="app-logo.png" Width="40" Height="40" Margin="0,0,11,0"
+                                   RenderOptions.BitmapScalingMode="HighQuality"/>
+                            <StackPanel VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="AI 清理助手" FontSize="19" FontWeight="Bold" Foreground="{StaticResource InkPrimary}"/>
+                                    <Border Background="#E2F0FF" BorderBrush="#B4D5FA" BorderThickness="1"
+                                            CornerRadius="5" Padding="5,1" Margin="7,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock Text="Pro" FontSize="10.5" FontWeight="Bold" Foreground="#1D4ED8"/>
+                                    </Border>
+                                </StackPanel>
+                                <TextBlock Text="白蓝玻璃三专区 · 零干扰安全维护" FontSize="12" Foreground="{StaticResource InkMuted}" Margin="0,2,0,0"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!-- Bottom Disk Space + 2x2 Utility Buttons -->
+                    <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+                        <Grid Margin="0,0,0,10">
+                            <Border Background="{StaticResource GlassLiftShadow}" CornerRadius="14" Margin="2,4,2,-3" IsHitTestVisible="False"/>
+                            <Border Background="{StaticResource GlassCardBrush}" BorderBrush="#C4DCF8"
+                                    BorderThickness="1" CornerRadius="13" Padding="14,12">
+                                <StackPanel>
+                                    <Grid Margin="0,0,0,8">
+                                        <TextBlock Text="磁盘可用空间" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource InkSecondary}"/>
+                                        <TextBlock x:Name="TxtTotalFreed" Text="累计释放 0 B" FontSize="12" FontWeight="Bold"
+                                                   Foreground="#1D4ED8" HorizontalAlignment="Right"/>
+                                    </Grid>
+                                    <Grid Margin="0,0,0,4">
+                                        <TextBlock Text="C 盘 (系统)" FontSize="12" Foreground="{StaticResource InkPrimary}"/>
+                                        <TextBlock x:Name="TxtDriveC" Text="读取中..." FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource InkSecondary}" HorizontalAlignment="Right"/>
+                                    </Grid>
+                                    <Border Height="6" CornerRadius="3" Background="#D8E8FA" Margin="0,0,0,9" ClipToBounds="True">
+                                        <ProgressBar x:Name="BarDriveC" Height="6" Maximum="100" Value="50"
+                                                     Background="Transparent" Foreground="#2563EB" BorderThickness="0"/>
+                                    </Border>
+                                    <StackPanel x:Name="PanelDrive2">
+                                        <Grid Margin="0,0,0,4">
+                                            <TextBlock x:Name="TxtDrive2Label" Text="数据盘" FontSize="12" Foreground="{StaticResource InkPrimary}"/>
+                                            <TextBlock x:Name="TxtDriveF" Text="读取中..." FontSize="12" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource InkSecondary}" HorizontalAlignment="Right"/>
+                                        </Grid>
+                                        <Border Height="6" CornerRadius="3" Background="#D8E8FA" ClipToBounds="True">
+                                            <ProgressBar x:Name="BarDriveF" Height="6" Maximum="100" Value="40"
+                                                         Background="Transparent" Foreground="#0EA5E9" BorderThickness="0"/>
+                                        </Border>
+                                    </StackPanel>
+                                    <Grid Margin="0,8,0,0" Cursor="Hand" MouseLeftButtonUp="BtnOpenRecycleBin_Click"
+                                          ToolTip="点击打开 Windows 回收站（移入回收站的文件清空后才会真正释放磁盘空间）">
+                                        <TextBlock Text="回收站占用" FontSize="11.5" Foreground="{StaticResource InkMuted}"/>
+                                        <TextBlock x:Name="TxtRecycleBinSize" Text="读取中..." FontSize="11.5" FontWeight="SemiBold"
+                                                   Foreground="#0369A1" HorizontalAlignment="Right"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+
+                        <!-- Utility 2x2 Glass Grid with Crisp Vector Icons -->
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="8"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <Button Grid.Row="0" Grid.Column="0" Style="{StaticResource GlassBtn}" Click="BtnShowHistory_Click">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Path Data="M7,2 A5,5 0 1 1 2,7 M7,4 V7 L9.2,8.5" Stroke="#2563EB" StrokeThickness="1.5"
+                                          Width="14" Height="14" Stretch="Uniform" Margin="0,0,6,0" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                    <TextBlock Text="清理历史" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+
+                            <Button x:Name="BtnSettingsSide" Grid.Row="0" Grid.Column="2" Style="{StaticResource GlassBtn}" Click="BtnShowSettings_Click">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Path Data="M2,4 H12 M2,10 H12 M5,2 V6 M9,8 V12" Stroke="#0284C7" StrokeThickness="1.5"
+                                          Width="14" Height="14" Stretch="Uniform" Margin="0,0,6,0" StrokeStartLineCap="Round"/>
+                                    <TextBlock Text="规则/白名单" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+
+                            <Button Grid.Row="2" Grid.Column="0" Style="{StaticResource GlassBtn}" Click="BtnOpenRecycleBin_Click">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Path Data="M3,4 H11 M5,4 V2.5 H9 V4 M4,4 L4.6,12 H9.4 L10,4" Stroke="#0A7A4E" StrokeThickness="1.4"
+                                          Width="14" Height="14" Stretch="Uniform" Margin="0,0,6,0" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                    <TextBlock Text="打开回收站" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+
+                            <Button Grid.Row="2" Grid.Column="2" Style="{StaticResource GlassBtn}" Click="BtnShowRedlines_Click">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Path Data="M7,1.5 L12,3.5 V7.2 C12,10 9.8,12 7,13 C4.2,12 2,10 2,7.2 V3.5 Z" Stroke="#B4233C" StrokeThickness="1.4"
+                                          Width="14" Height="14" Stretch="Uniform" Margin="0,0,6,0" StrokeLineJoin="Round"/>
+                                    <TextBlock Text="红线说明" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+                    </StackPanel>
+
+                    <!-- 3 FROSTED GLASS ZONE CARDS (Sibling Shadow -> Razor-Sharp Text!) -->
+                    <StackPanel>
+                        <TextBlock Text="选择清理专区" FontSize="12" FontWeight="SemiBold"
+                                   Foreground="{StaticResource InkMuted}" Margin="4,0,0,10"/>
+
+                        <!-- Zone 1: Antigravity -->
+                        <Grid Margin="0,0,0,11" Cursor="Hand" MouseLeftButtonUp="ZoneCard_Antigravity_Click">
+                            <Border x:Name="ShadowAntigravity" Background="{StaticResource GlassLiftShadowActive}" CornerRadius="14"
+                                    Margin="2,4,2,-3" IsHitTestVisible="False"/>
+                            <Border x:Name="CardAntigravity" Background="{StaticResource ActiveZoneBrush}"
+                                    BorderBrush="#2563EB" BorderThickness="1.6"
+                                    CornerRadius="13" Padding="14,12">
+                                <Grid>
+                                    <Border x:Name="BarAgAccent" Width="3.5" CornerRadius="2" Background="#2563EB"
+                                            HorizontalAlignment="Left" Margin="-7,2,0,2"/>
+                                    <StackPanel>
+                                        <Grid>
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <Border Width="22" Height="22" CornerRadius="6" Background="#E4F0FF" Margin="0,0,8,0">
+                                                    <Path Data="M7,1.5 L8.6,5.4 L12.5,7 L8.6,8.6 L7,12.5 L5.4,8.6 L1.5,7 L5.4,5.4 Z"
+                                                          Fill="#2563EB" Width="12" Height="12" Stretch="Uniform"/>
+                                                </Border>
+                                                <TextBlock Text="Antigravity 专区" FontSize="14.5" FontWeight="Bold" Foreground="{StaticResource InkPrimary}"/>
+                                            </StackPanel>
+                                            <Border x:Name="DotAgProc" Width="8" Height="8" CornerRadius="4" Background="#10B981"
+                                                    HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                        </Grid>
+                                        <TextBlock x:Name="TxtAgSideProc" Text="检测进程中..." FontSize="12"
+                                                   Foreground="{StaticResource InkSecondary}" Margin="30,4,0,0"/>
+                                        <TextBlock x:Name="TxtAgSideSize" Text="点击扫描" FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="#1D4ED8" Margin="30,3,0,0"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </Grid>
+
+                        <!-- Zone 2: GPT / Codex -->
+                        <Grid Margin="0,0,0,11" Cursor="Hand" MouseLeftButtonUp="ZoneCard_Gpt_Click">
+                            <Border x:Name="ShadowGpt" Background="{StaticResource GlassLiftShadow}" CornerRadius="14"
+                                    Margin="2,4,2,-3" IsHitTestVisible="False"/>
+                            <Border x:Name="CardGpt" Background="{StaticResource GlassCardBrush}"
+                                    BorderBrush="{StaticResource BorderGlass}" BorderThickness="1"
+                                    CornerRadius="13" Padding="14,12">
+                                <Grid>
+                                    <Border x:Name="BarGptAccent" Width="3.5" CornerRadius="2" Background="#0284C7"
+                                            HorizontalAlignment="Left" Margin="-7,2,0,2" Visibility="Collapsed"/>
+                                    <StackPanel>
+                                        <Grid>
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <Border Width="22" Height="22" CornerRadius="6" Background="#E0F4FF" Margin="0,0,8,0">
+                                                    <Path Data="M2.5,4 L6,7 L2.5,10 M7.5,10 H12" Stroke="#0284C7" StrokeThickness="1.7"
+                                                          Width="12" Height="12" Stretch="Uniform" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                                </Border>
+                                                <TextBlock Text="GPT / Codex 专区" FontSize="14.5" FontWeight="Bold" Foreground="{StaticResource InkPrimary}"/>
+                                            </StackPanel>
+                                            <Border x:Name="DotGptProc" Width="8" Height="8" CornerRadius="4" Background="#10B981"
+                                                    HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                        </Grid>
+                                        <TextBlock x:Name="TxtGptSideProc" Text="检测进程中..." FontSize="12"
+                                                   Foreground="{StaticResource InkSecondary}" Margin="30,4,0,0"/>
+                                        <TextBlock x:Name="TxtGptSideSize" Text="点击扫描" FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="#0369A1" Margin="30,3,0,0"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </Grid>
+
+                        <!-- Zone 3: DeepSeek Harness -->
+                        <Grid Margin="0,0,0,11" Cursor="Hand" MouseLeftButtonUp="ZoneCard_Dsh_Click">
+                            <Border x:Name="ShadowDsh" Background="{StaticResource GlassLiftShadow}" CornerRadius="14"
+                                    Margin="2,4,2,-3" IsHitTestVisible="False"/>
+                            <Border x:Name="CardDsh" Background="{StaticResource GlassCardBrush}"
+                                    BorderBrush="{StaticResource BorderGlass}" BorderThickness="1"
+                                    CornerRadius="13" Padding="14,12">
+                                <Grid>
+                                    <Border x:Name="BarDshAccent" Width="3.5" CornerRadius="2" Background="#4F46E5"
+                                            HorizontalAlignment="Left" Margin="-7,2,0,2" Visibility="Collapsed"/>
+                                    <StackPanel>
+                                        <Grid>
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <Border Width="22" Height="22" CornerRadius="6" Background="#ECEBFF" Margin="0,0,8,0">
+                                                    <Path Data="M7,1.5 L12.5,4.5 L7,7.5 L1.5,4.5 Z M1.5,8.2 L7,11.2 L12.5,8.2"
+                                                          Stroke="#4F46E5" StrokeThickness="1.5" Width="12" Height="12" Stretch="Uniform"
+                                                          StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                                </Border>
+                                                <TextBlock Text="DeepSeek Harness" FontSize="14.5" FontWeight="Bold" Foreground="{StaticResource InkPrimary}"/>
+                                            </StackPanel>
+                                            <Border x:Name="DotDshProc" Width="8" Height="8" CornerRadius="4" Background="#8AA0BC"
+                                                    HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                        </Grid>
+                                        <TextBlock x:Name="TxtDshSideProc" Text="检测进程中..." FontSize="12"
+                                                   Foreground="{StaticResource InkSecondary}" Margin="30,4,0,0"/>
+                                        <TextBlock x:Name="TxtDshSideSize" Text="点击扫描" FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="#4338CA" Margin="30,3,0,0"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </Grid>
+
+                        <Button x:Name="BtnScanAllZones" Style="{StaticResource GlassBtn}" Margin="0,4,0,0" Padding="12,7.5"
+                                Click="BtnScanAllZones_Click">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Path Data="M11.5,7 A4.5,4.5 0 1 1 10.2,3.8 M10.2,1.5 V4 H7.7" Stroke="#1D4ED8" StrokeThickness="1.6"
+                                      Width="14" Height="14" Stretch="Uniform" Margin="0,0,7,0" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                <TextBlock Text="一键扫描全部三个专区" FontWeight="SemiBold" Foreground="#1D4ED8"/>
+                            </StackPanel>
+                        </Button>
+
+                        <Button x:Name="BtnQuickCleanAllSafe" Style="{StaticResource GlassBtn}" Margin="0,7,0,0" Padding="12,7.5"
+                                Click="BtnQuickCleanAllSafe_Click"
+                                ToolTip="仅清理三个专区中的绿区在线安全项（绝不碰黄区/蓝区/红区），执行前弹出完整清单确认">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Path Data="M3,7 L5.8,9.8 L11,4.2" Stroke="#0A7A4E" StrokeThickness="1.8"
+                                      Width="13" Height="13" Stretch="Uniform" Margin="0,0,7,0" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                <TextBlock x:Name="TxtQuickCleanAllSafe" Text="一键清三区绿区安全缓存" FontWeight="SemiBold" Foreground="#0A7A4E"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <!-- RIGHT MAIN FROSTED WORKSPACE -->
+            <DockPanel Grid.Column="1" Margin="24,18,24,16" RenderOptions.ClearTypeHint="Enabled">
+
+                <!-- Header Row -->
+                <Grid DockPanel.Dock="Top" Margin="0,0,0,15">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                        <WrapPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock x:Name="TxtZoneTitle" Text="Antigravity 专区" FontSize="23" FontWeight="Bold"
+                                       Foreground="{StaticResource InkPrimary}" VerticalAlignment="Center"/>
+                            <Border x:Name="BadgeProcStatus" CornerRadius="13" Padding="11,4.5" Margin="12,2,0,0"
+                                    Background="#E2F8EE" BorderBrush="#9EE2C4" BorderThickness="1" VerticalAlignment="Center">
+                                <TextBlock x:Name="TxtProcBadge" Text="检测中..." FontSize="12" FontWeight="SemiBold" Foreground="#0B7A4B"/>
+                            </Border>
+                        </WrapPanel>
+                        <TextBlock x:Name="TxtZoneSubtitle"
+                                   Text="覆盖 Antigravity 客户端更新残留、运行缓存、崩溃/客户端日志、历史会话产物与离线浏览器缓存；硬保护 conversations 主对话库与登录态。"
+                                   FontSize="12.5" Foreground="{StaticResource InkSecondary}" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="BtnRescanZone" Style="{StaticResource GlassBtn}" Margin="0,0,8,0" Click="BtnRescanZone_Click">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Path Data="M11.5,7 A4.5,4.5 0 1 1 10.2,3.8 M10.2,1.5 V4 H7.7" Stroke="#2563EB" StrokeThickness="1.5"
+                                      Width="13" Height="13" Stretch="Uniform" Margin="0,0,6,0" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                <TextBlock Text="重新扫描本区"/>
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="BtnExportReport" Style="{StaticResource GlassBtn}" Click="BtnExportReport_Click">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Path Data="M7,2 V9.5 M4.2,6.8 L7,9.6 L9.8,6.8 M2.5,12 H11.5" Stroke="#0284C7" StrokeThickness="1.5"
+                                      Width="13" Height="13" Stretch="Uniform" Margin="0,0,6,0" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                <TextBlock Text="导出体检报告"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                </Grid>
+
+                <!-- 3 FROSTED GLASS KPI CARDS (Sibling Shadow -> 100% Razor-Sharp ClearType!) -->
+                <Grid DockPanel.Dock="Top" Margin="0,0,0,13">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="14"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="14"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- KPI 1: Green Online Safe -->
+                    <Grid Grid.Column="0" Cursor="Hand" MouseLeftButtonUp="KpiSafe_Click">
+                        <Border Background="{StaticResource GlassLiftShadow}" CornerRadius="14" Margin="2,4,2,-3" IsHitTestVisible="False"/>
+                        <Border Background="{StaticResource GlassCardBrush}" BorderBrush="#C2E5D7"
+                                BorderThickness="1.1" CornerRadius="13" Padding="16,13">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Border Width="20" Height="20" CornerRadius="6" Background="#E0F7EC" Margin="0,0,7,0">
+                                        <Path Data="M3,7 L5.8,9.8 L11,4.2" Stroke="#0A7A4E" StrokeThickness="1.8"
+                                              Width="11" Height="11" Stretch="Uniform" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                    </Border>
+                                    <TextBlock Text="绿区 · 在线安全可清（运行中可用）" FontSize="12" FontWeight="SemiBold" Foreground="#0A7A4E"/>
+                                </StackPanel>
+                                <TextBlock x:Name="TxtKpiSafe" Text="--" FontSize="24" FontWeight="Bold"
+                                           Foreground="{StaticResource InkPrimary}" Margin="0,7,0,0"/>
+                                <TextBlock x:Name="TxtKpiSafeSub" Text="等待扫描" FontSize="12" Foreground="{StaticResource InkMuted}" Margin="0,3,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <!-- KPI 2: Yellow Recycle Bin -->
+                    <Grid Grid.Column="2" Cursor="Hand" MouseLeftButtonUp="KpiRecycle_Click">
+                        <Border Background="{StaticResource GlassLiftShadow}" CornerRadius="14" Margin="2,4,2,-3" IsHitTestVisible="False"/>
+                        <Border Background="{StaticResource GlassCardBrush}" BorderBrush="#F0DBAE"
+                                BorderThickness="1.1" CornerRadius="13" Padding="16,13">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Border Width="20" Height="20" CornerRadius="6" Background="#FFF4DA" Margin="0,0,7,0">
+                                        <Path Data="M3,4 H11 M5,4 V2.5 H9 V4 M4.2,4 L4.8,11.5 H9.2 L9.8,4" Stroke="#A65E04" StrokeThickness="1.5"
+                                              Width="11" Height="11" Stretch="Uniform" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                    </Border>
+                                    <TextBlock Text="黄区 · 移入回收站瘦身（可撤销）" FontSize="12" FontWeight="SemiBold" Foreground="#A65E04"/>
+                                </StackPanel>
+                                <TextBlock x:Name="TxtKpiRecycle" Text="--" FontSize="24" FontWeight="Bold"
+                                           Foreground="{StaticResource InkPrimary}" Margin="0,7,0,0"/>
+                                <TextBlock x:Name="TxtKpiRecycleSub" Text="等待扫描" FontSize="12" Foreground="{StaticResource InkMuted}" Margin="0,3,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <!-- KPI 3: Blue/Indigo Offline Cache -->
+                    <Grid Grid.Column="4" Cursor="Hand" MouseLeftButtonUp="KpiOffline_Click">
+                        <Border Background="{StaticResource GlassLiftShadow}" CornerRadius="14" Margin="2,4,2,-3" IsHitTestVisible="False"/>
+                        <Border Background="{StaticResource GlassCardBrush}" BorderBrush="#C4D1F9"
+                                BorderThickness="1.1" CornerRadius="13" Padding="16,13">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Border Width="20" Height="20" CornerRadius="6" Background="#E9ECFF" Margin="0,0,7,0">
+                                        <Path Data="M4,6 V4.5 A3,3 0 0 1 10,4.5 V6 M3,6 H11 V12 H3 Z" Stroke="#4338CA" StrokeThickness="1.5"
+                                              Width="11" Height="11" Stretch="Uniform" StrokeLineJoin="Round"/>
+                                    </Border>
+                                    <TextBlock Text="蓝区 · 离线浏览器缓存（退出后可清）" FontSize="12" FontWeight="SemiBold" Foreground="#4338CA"/>
+                                </StackPanel>
+                                <TextBlock x:Name="TxtKpiOffline" Text="--" FontSize="24" FontWeight="Bold"
+                                           Foreground="{StaticResource InkPrimary}" Margin="0,7,0,0"/>
+                                <TextBlock x:Name="TxtKpiOfflineSub" Text="等待扫描" FontSize="12" Foreground="{StaticResource InkMuted}" Margin="0,3,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </Grid>
+
+                <!-- VISUAL SPACE BREAKDOWN STRIP (Roomy / Mole Inspired) -->
+                <Border DockPanel.Dock="Top" Background="#D8FFFFFF" BorderBrush="#CBE0F8" BorderThickness="1"
+                        CornerRadius="9" Padding="12,6.5" Margin="0,0,0,10">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="空间分布" FontSize="11.5" FontWeight="SemiBold" Foreground="{StaticResource InkSecondary}"
+                                   VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <Border Grid.Column="1" Height="8" CornerRadius="4" Background="#DCEBFA" ClipToBounds="True" VerticalAlignment="Center">
+                            <Grid x:Name="GridBreakdownBar">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition x:Name="ColBarSafe" Width="1*"/>
+                                    <ColumnDefinition x:Name="ColBarRecycle" Width="1*"/>
+                                    <ColumnDefinition x:Name="ColBarOffline" Width="1*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Background="#10B981"/>
+                                <Border Grid.Column="1" Background="#F59E0B"/>
+                                <Border Grid.Column="2" Background="#6366F1"/>
+                            </Grid>
+                        </Border>
+                        <TextBlock x:Name="TxtBreakdownSummary" Grid.Column="2" Text="统计中..." FontSize="11.5" FontWeight="Medium"
+                                   Foreground="{StaticResource InkSecondary}" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    </Grid>
+                </Border>
+
+                <!-- GPT-ONLY SCHEDULED TASK GLASS STRIP -->
+                <Border x:Name="BarGptSchedule" DockPanel.Dock="Top" Visibility="Collapsed"
+                        Background="#EBEEFAFF" BorderBrush="#AED3FA" BorderThickness="1"
+                        CornerRadius="10" Padding="14,9" Margin="0,0,0,11">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Path Data="M7,2 A5,5 0 1 1 2,7 M7,4 V7 L9.2,8.5" Stroke="#0284C7" StrokeThickness="1.6"
+                                  Width="14" Height="14" Stretch="Uniform" Margin="0,0,8,0" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                            <TextBlock Text="每周自动维护 (CodexSafeTempCleanup)：" FontSize="12.5" FontWeight="SemiBold" Foreground="#0369A1"/>
+                            <TextBlock x:Name="TxtScheduleStatus" Text="读取状态中..." FontSize="12.5" Foreground="{StaticResource InkPrimary}"/>
+                        </StackPanel>
+                        <Button Grid.Column="1" x:Name="BtnToggleSchedule" Content="停用定时任务"
+                                Style="{StaticResource GlassBtn}" Padding="12,4.5" Click="BtnToggleSchedule_Click"/>
+                    </Grid>
+                </Border>
+
+                <!-- UNIFIED FILTER + SEARCH + ACTION GLASS BAR (Zero-Shader Layered Glass!) -->
+                <Grid DockPanel.Dock="Top" Margin="0,0,0,11">
+                    <Border Background="{StaticResource GlassLiftShadow}" CornerRadius="13" Margin="2,4,2,-3" IsHitTestVisible="False"/>
+                    <Border Background="{StaticResource GlassCard}" BorderBrush="#C4DCF8"
+                            BorderThickness="1" CornerRadius="12" Padding="12,10">
+                        <StackPanel>
+                            <!-- Row 1: Filter Pills + Search + Sort + Policy -->
+                            <Grid Margin="0,0,0,9">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <RadioButton x:Name="RbFilterAll" Content="全部" GroupName="Filter" IsChecked="True"
+                                                 Style="{StaticResource FilterPill}" Checked="Filter_Changed"/>
+                                    <RadioButton x:Name="RbFilterSafe" Content="在线安全" GroupName="Filter"
+                                                 Style="{StaticResource FilterPill}" Checked="Filter_Changed"/>
+                                    <RadioButton x:Name="RbFilterRecycle" Content="回收站瘦身" GroupName="Filter"
+                                                 Style="{StaticResource FilterPill}" Checked="Filter_Changed"/>
+                                    <RadioButton x:Name="RbFilterOffline" Content="离线缓存" GroupName="Filter"
+                                                 Style="{StaticResource FilterPill}" Checked="Filter_Changed"/>
+                                    <RadioButton x:Name="RbFilterProtected" Content="已保护/白名单" GroupName="Filter"
+                                                 Style="{StaticResource FilterPill}" Checked="Filter_Changed"/>
+                                </StackPanel>
+
+                                <Grid Grid.Column="1" Margin="8,0,8,0">
+                                    <TextBox x:Name="TxtSearch" Style="{StaticResource GlassSearchBox}" Height="31"
+                                             TextChanged="TxtSearch_TextChanged"/>
+                                    <Path Data="M6,2 A4,4 0 1 1 2,6 A4,4 0 0 1 6,2 Z M9.2,9.2 L12,12"
+                                          Stroke="#6E89AA" StrokeThickness="1.5" Width="13" Height="13" Stretch="Uniform"
+                                          HorizontalAlignment="Left" VerticalAlignment="Center" Margin="10,0,0,0"
+                                          IsHitTestVisible="False" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                    <TextBlock x:Name="TxtSearchPlaceholder" Text="搜索名称、路径或说明..."
+                                               FontSize="12.5" Foreground="#7E97B5" IsHitTestVisible="False"
+                                               VerticalAlignment="Center" Margin="30,0,0,0"/>
+                                </Grid>
+
+                                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <ComboBox x:Name="CmbSort" Width="116" Height="31"
+                                              VerticalContentAlignment="Center" SelectedIndex="0"
+                                              SelectionChanged="CmbSort_SelectionChanged" Margin="0,0,7,0">
+                                        <ComboBoxItem Content="按分级/体积"/>
+                                        <ComboBoxItem Content="体积从大到小"/>
+                                        <ComboBoxItem Content="时间从旧到新"/>
+                                        <ComboBoxItem Content="按名称排序"/>
+                                    </ComboBox>
+                                    <Button x:Name="BtnPolicyQuick" Content="阈值: 3天/200M" Style="{StaticResource GlassBtn}"
+                                            Height="31" Padding="10,0" Click="BtnShowSettings_Click"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- Row 2: Quick Selectors + Primary Ocean CTA -->
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button Content="勾选在线安全项" Style="{StaticResource GlassBtn}" Margin="0,0,6,0" Click="BtnSelectSafe_Click"/>
+                                    <Button x:Name="BtnSelectRecommended" Content="勾选高置信推荐" Style="{StaticResource GlassBtn}"
+                                            Margin="0,0,6,0" Click="BtnSelectRecommended_Click"/>
+                                    <Button Content="取消全选" Style="{StaticResource GlassBtn}" Margin="0,0,6,0" Click="BtnClearSelection_Click"/>
+                                    <Button x:Name="BtnSpaceMapToolbar" Content="空间雷达" Style="{StaticResource GlassBtn}" Margin="0,0,6,0" Click="BtnSpaceMap_Click"
+                                            ToolTip="只读透视选中目录（或当前专区根目录）的 Top 50 大文件与子目录占比"/>
+                                    <Button Content="定位文件夹" Style="{StaticResource GlassBtn}" Margin="0,0,6,0" Click="BtnLocateSelected_Click"/>
+                                    <Button x:Name="BtnWhitelistToolbar" Content="加入白名单" Style="{StaticResource GlassBtn}" Click="BtnWhitelistSelected_Click"/>
+                                </StackPanel>
+
+                                <Button Grid.Column="1" x:Name="BtnCleanSelected" Content="执行已勾选清理 (0 项)"
+                                        Style="{StaticResource PrimaryGlassBtn}" IsEnabled="False" Click="BtnCleanSelected_Click"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+
+                <!-- BOTTOM FROSTED STATUS BAR -->
+                <Grid DockPanel.Dock="Bottom" Margin="0,9,0,0">
+                    <Border Background="{StaticResource GlassLiftShadow}" CornerRadius="11" Margin="2,3,2,-2" IsHitTestVisible="False"/>
+                    <Border Background="{StaticResource GlassCard}" BorderBrush="#C4DCF8"
+                            BorderThickness="1" CornerRadius="10" Padding="14,8.5">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <ProgressBar x:Name="BarBusy" Grid.Column="0" Width="96" Height="6" IsIndeterminate="False"
+                                         Visibility="Collapsed" Margin="0,0,10,0" VerticalAlignment="Center"
+                                         Background="#D6E8FB" Foreground="#2563EB" BorderThickness="0"/>
+                            <TextBlock x:Name="TxtStatusLine" Grid.Column="1" Text="就绪。默认只读扫描，绝不自动删除任何文件或关闭运行中的桌面端。"
+                                       FontSize="12.5" Foreground="{StaticResource InkSecondary}" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"/>
+                            <TextBlock x:Name="TxtLastAuditHint" Grid.Column="2" Text="" FontSize="12" FontWeight="Medium"
+                                       Foreground="#1D4ED8" VerticalAlignment="Center" Margin="12,0,0,0"
+                                       Cursor="Hand" MouseLeftButtonUp="BtnOpenLogs_Click"/>
+                        </Grid>
+                    </Border>
+                </Grid>
+
+                <!-- KLEANER-STYLE VERDICT & PATH INSPECTOR STRIP -->
+                <Border x:Name="BarInspector" DockPanel.Dock="Bottom" Margin="0,9,0,0"
+                        Background="#DEFFFFFF" BorderBrush="#C4DCF8" BorderThickness="1"
+                        CornerRadius="10" Padding="12,8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,0,10,0">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Border x:Name="BadgeInspectorTier" Background="#E6F3FF" BorderBrush="#A7D0FC" BorderThickness="1"
+                                        CornerRadius="5" Padding="6,1.5" Margin="0,0,8,0">
+                                    <TextBlock x:Name="TxtInspectorTier" Text="项目透视" FontSize="11" FontWeight="SemiBold" Foreground="#1B5BB8"/>
+                                </Border>
+                                <TextBlock x:Name="TxtInspectorPath" Text="单击列表任意项目，在此查看完整路径、安全判定说明与影响评估（双击打开目录）"
+                                           FontSize="12" FontWeight="Medium" Foreground="{StaticResource InkPrimary}"
+                                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <TextBlock x:Name="TxtInspectorVerdict"
+                                       Text="双层引擎红线校验：运行中仅清理超期未占用文件，大目录与安装包残留均移入 Windows 回收站可随时撤销。"
+                                       FontSize="11.5" Foreground="{StaticResource InkSecondary}" Margin="0,3,0,0"
+                                       TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button x:Name="BtnInspectorSpaceMap" Content="透视" Style="{StaticResource GlassBtn}"
+                                    Padding="9,4" Margin="0,0,6,0" Click="BtnSpaceMap_Click"/>
+                            <Button x:Name="BtnInspectorCopy" Content="复制路径" Style="{StaticResource GlassBtn}"
+                                    Padding="9,4" IsEnabled="False" Click="MenuCopyPath_Click"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- MAIN FROSTED GLASS DATAGRID CARD (Row Recycling Virtualization + Zero Shader Overhead -> 60 FPS!) -->
+                <Grid>
+                    <Border Background="{StaticResource GlassLiftShadow}" CornerRadius="14" Margin="2,4,2,-3" IsHitTestVisible="False"/>
+                    <Border Background="{StaticResource GlassCardStrong}" BorderBrush="#C4DCF8"
+                            BorderThickness="1.1" CornerRadius="13" ClipToBounds="True"
+                            RenderOptions.ClearTypeHint="Enabled">
+                        <DataGrid x:Name="GridCandidates"
+                                  AutoGenerateColumns="False"
+                                  CanUserAddRows="False"
+                                  CanUserDeleteRows="False"
+                                  CanUserResizeRows="False"
+                                  HeadersVisibility="Column"
+                                  GridLinesVisibility="None"
+                                  Background="Transparent"
+                                  BorderThickness="0"
+                                  RowHeight="56"
+                                  SelectionMode="Single"
+                                  EnableRowVirtualization="True"
+                                  EnableColumnVirtualization="True"
+                                  VirtualizingPanel.IsVirtualizing="True"
+                                  VirtualizingPanel.VirtualizationMode="Recycling"
+                                  ScrollViewer.CanContentScroll="True"
+                                  RenderOptions.ClearTypeHint="Enabled"
+                                  TextOptions.TextFormattingMode="Display"
+                                  SelectionChanged="GridCandidates_SelectionChanged"
+                                  MouseDoubleClick="GridCandidates_MouseDoubleClick">
+                            <DataGrid.ContextMenu>
+                                <ContextMenu FontFamily="{StaticResource AppFont}" FontSize="12.5">
+                                    <MenuItem Header="透视大文件 (空间雷达 · 只读)" Click="BtnSpaceMap_Click"/>
+                                    <MenuItem Header="在资源管理器中打开" Click="MenuOpenFolder_Click"/>
+                                    <MenuItem Header="复制完整路径" Click="MenuCopyPath_Click"/>
+                                    <Separator/>
+                                    <MenuItem Header="加入永久保留白名单" Click="MenuAddWhitelist_Click"/>
+                                    <MenuItem Header="移出白名单保护" Click="MenuRemoveWhitelist_Click"/>
+                                </ContextMenu>
+                            </DataGrid.ContextMenu>
+                            <DataGrid.Columns>
+                                <DataGridTemplateColumn Header="选" Width="46">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                      IsEnabled="{Binding CanSelect}"
+                                                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                      Checked="ItemCheckbox_Changed" Unchecked="ItemCheckbox_Changed"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+
+                                <DataGridTemplateColumn Header="安全分级" Width="132">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Border Background="{Binding TierColorHex}" BorderBrush="{Binding TierBorderHex}"
+                                                    BorderThickness="1" CornerRadius="7" Padding="8,3.5" HorizontalAlignment="Left">
+                                                <TextBlock Text="{Binding TierBadge}" Foreground="{Binding TierInkHex}"
+                                                           FontSize="12" FontWeight="SemiBold"/>
+                                            </Border>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+
+                                <DataGridTemplateColumn Header="项目与路径（双击打开 · 右键白名单）" Width="2.2*">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <StackPanel VerticalAlignment="Center" ToolTip="{Binding Path}">
+                                                <TextBlock Text="{Binding Title}" FontSize="13.5" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource InkPrimary}" TextTrimming="CharacterEllipsis"/>
+                                                <TextBlock Text="{Binding Path}" FontSize="12"
+                                                           Foreground="{StaticResource InkMuted}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+
+                                <DataGridTextColumn Header="体积" Binding="{Binding SizeText}" Width="96" IsReadOnly="True">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="FontFamily" Value="{StaticResource AppFont}"/>
+                                            <Setter Property="FontSize" Value="13.5"/>
+                                            <Setter Property="HorizontalAlignment" Value="Right"/>
+                                            <Setter Property="FontWeight" Value="Bold"/>
+                                            <Setter Property="Foreground" Value="#0A1C36"/>
+                                            <Setter Property="Margin" Value="0,0,8,0"/>
+                                            <Setter Property="TextOptions.TextFormattingMode" Value="Display"/>
+                                            <Setter Property="RenderOptions.ClearTypeHint" Value="Enabled"/>
+                                        </Style>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
+
+                                <DataGridTextColumn Header="文件数" Binding="{Binding FileCount}" Width="76" IsReadOnly="True">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="FontFamily" Value="{StaticResource AppFont}"/>
+                                            <Setter Property="FontSize" Value="12.5"/>
+                                            <Setter Property="HorizontalAlignment" Value="Right"/>
+                                            <Setter Property="Foreground" Value="#3A5373"/>
+                                            <Setter Property="Margin" Value="0,0,8,0"/>
+                                            <Setter Property="TextOptions.TextFormattingMode" Value="Display"/>
+                                            <Setter Property="RenderOptions.ClearTypeHint" Value="Enabled"/>
+                                        </Style>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
+
+                                <DataGridTextColumn Header="最新修改" Binding="{Binding LastWriteText}" Width="128" IsReadOnly="True">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="FontFamily" Value="{StaticResource AppFont}"/>
+                                            <Setter Property="FontSize" Value="12"/>
+                                            <Setter Property="Foreground" Value="#3A5373"/>
+                                            <Setter Property="TextOptions.TextFormattingMode" Value="Display"/>
+                                            <Setter Property="RenderOptions.ClearTypeHint" Value="Enabled"/>
+                                        </Style>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
+
+                                <DataGridTemplateColumn Header="说明 / 清理反馈" Width="1.85*">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <StackPanel VerticalAlignment="Center" ToolTip="{Binding Reason}">
+                                                <TextBlock Text="{Binding Reason}" FontSize="12"
+                                                           Foreground="{StaticResource InkSecondary}" TextTrimming="CharacterEllipsis"/>
+                                                <TextBlock Text="{Binding StatusText}" FontSize="12" FontWeight="SemiBold"
+                                                           Foreground="#0A7A4E" TextTrimming="CharacterEllipsis"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+                </Grid>
+            </DockPanel>
+        </Grid>
+    </Grid>
+</Window>
