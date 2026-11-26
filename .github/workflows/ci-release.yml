@@ -1,0 +1,288 @@
+name: CI & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-verify:
+    name: Build, Self-Test & Verify Package (win-x64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Guard against personal path leaks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $hits = New-Object System.Collections.Generic.List[string]
+          $root = (Get-Location).Path
+          $excludeDirs = @('.git', 'bin', 'obj', 'dist', 'publish')
+          # Build regex dynamically so this workflow itself can be scanned without false self-matching
+          $userPathRule = '(?i)C:\\' + 'Users\\(?!<|your|user|example|username|%|Public|Default)[A-Za-z0-9._-]{2,}\\'
+          $files = Get-ChildItem -Recurse -File | Where-Object {
+            $rel = $_.FullName.Substring($root.Length).TrimStart('\', '/')
+            $parts = $rel -split '[\\/]'
+            -not ($parts | Where-Object { $excludeDirs -contains $_ }) -and
+            $_.Extension -in @('.cs', '.xaml', '.csproj', '.manifest', '.ps1', '.cmd', '.json', '.md', '.yml', '.yaml', '.txt')
+          }
+          foreach ($f in $files) {
+            $relPath = $f.FullName.Substring($root.Length).TrimStart('\', '/')
+            $lines = @(Get-Content -LiteralPath $f.FullName -Encoding UTF8 -ErrorAction SilentlyContinue)
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match $userPathRule) {
+                # Never echo matched line content into public CI logs; report file, line, and rule ID only.
+                $hits.Add("${relPath}:$($i + 1) [rule=hardcoded-user-profile-path]")
+              }
+            }
+          }
+          if ($hits.Count -gt 0) {
+            Write-Host "::error::Potential hardcoded local user profile path detected:"
+            $hits | ForEach-Object { Write-Host "  $_" }
+            exit 1
+          }
+          Write-Host "Privacy path guard passed across $($files.Count) files (0 hits)."
+
+      - name: Validate PowerShell scripts syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scripts = Get-ChildItem -Path ".\scripts" -Filter "*.ps1" -Recurse -File
+          foreach ($s in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($s.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors -and $errors.Count -gt 0) {
+              foreach ($e in $errors) {
+                Write-Host "::error file=$($s.FullName),line=$($e.Extent.StartLineNumber)::$($e.Message)"
+              }
+              exit 1
+            }
+            Write-Host "Parsed OK: $($s.Name)"
+          }
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Publish single-file win-x64 binary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet publish .\src\AICleaner.csproj -c Release -r win-x64 --no-self-contained `
+            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o .\dist\staging
+
+      - name: Assemble release ZIP and SHA256SUMS
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path .\dist\pkg\skills\ai-cleaner -Force | Out-Null
+          Copy-Item .\dist\staging\AICleaner.exe .\dist\pkg\AICleaner.exe
+          Copy-Item .\settings.example.json .\dist\pkg\settings.example.json
+          Copy-Item .\README.md .\dist\pkg\README.md
+          Copy-Item .\README.en.md .\dist\pkg\README.en.md
+          Copy-Item .\LICENSE .\dist\pkg\LICENSE
+          Copy-Item .\skills\ai-cleaner\SKILL.md .\dist\pkg\skills\ai-cleaner\SKILL.md
+
+          New-Item -ItemType Directory -Path .\dist\release -Force | Out-Null
+          $zipPath = (Resolve-Path .\dist\release).Path + "\AICleaner-win-x64.zip"
+          Compress-Archive -Path .\dist\pkg\* -DestinationPath $zipPath -Force
+
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()
+          "$hash  AICleaner-win-x64.zip" | Set-Content -LiteralPath .\dist\release\SHA256SUMS.txt -Encoding ASCII -NoNewline
+          Write-Host "Packaged: $zipPath ($hash)"
+
+      - name: Verify extracted release ZIP (--self-test & non-empty CLI JSON fixtures)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zipPath = (Resolve-Path .\dist\release\AICleaner-win-x64.zip).Path
+          $sumLine = (Get-Content -LiteralPath .\dist\release\SHA256SUMS.txt -Raw).Trim()
+          $expectedHash = ($sumLine -split '\s+')[0].ToLowerInvariant()
+          $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()
+          if ($expectedHash -ne $actualHash) {
+            throw "SHA256 mismatch: expected=$expectedHash actual=$actualHash"
+          }
+
+          $verifyDir = ".\dist\verify-extract"
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $verifyDir -Force
+          $exe = (Resolve-Path "$verifyDir\AICleaner.exe").Path
+
+          function Invoke-CliCaptured([string[]]$CliArgs, [int]$TimeoutMs = 120000) {
+            $psi = [System.Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = $exe
+            foreach ($a in $CliArgs) { [void]$psi.ArgumentList.Add($a) }
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+            $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            try {
+              # Concurrent async stream reads prevent stdout/stderr buffer deadlocks
+              $outTask = $proc.StandardOutput.ReadToEndAsync()
+              $errTask = $proc.StandardError.ReadToEndAsync()
+              if (-not $proc.WaitForExit($TimeoutMs)) {
+                try { $proc.Kill($true) } catch {}
+                throw "CLI timed out after ${TimeoutMs}ms: $($CliArgs -join ' ')"
+              }
+              $proc.WaitForExit()
+              return [pscustomobject]@{
+                ExitCode = $proc.ExitCode
+                StdOut   = $outTask.GetAwaiter().GetResult()
+                StdErr   = $errTask.GetAwaiter().GetResult()
+              }
+            } finally {
+              $proc.Dispose()
+            }
+          }
+
+          Write-Host "--- 1. Running --self-test on extracted release binary ---"
+          $selfOut = (Resolve-Path .\dist).Path + "\selftest.txt"
+          $st = Invoke-CliCaptured @("--self-test", $selfOut)
+          $selfText = Get-Content -LiteralPath $selfOut -Raw -Encoding UTF8
+          Write-Host $selfText
+          if ($st.ExitCode -ne 0 -or $selfText -notmatch 'SELF_TEST_RESULT=PASS' -or $selfText -match '(?m)^\[FAIL\]') {
+            throw "Self-test failed (ExitCode=$($st.ExitCode))"
+          }
+
+          Write-Host "--- 2. Verifying --list-zones --json ---"
+          $lz = Invoke-CliCaptured @("--list-zones", "--json")
+          if ($lz.ExitCode -ne 0) { throw "--list-zones failed: ExitCode=$($lz.ExitCode) StdErr=$($lz.StdErr)" }
+          $lzObj = $lz.StdOut | ConvertFrom-Json
+          if ($lzObj.schemaVersion -ne "1.0" -or $lzObj.zones.Count -ne 5) {
+            throw "Unexpected --list-zones payload: schema=$($lzObj.schemaVersion) count=$($lzObj.zones.Count)"
+          }
+          Write-Host "Zones verified: $(($lzObj.zones | ForEach-Object { $_.slug }) -join ', ')"
+
+          Write-Host "--- 3. Seeding non-empty Claude Code & AI Toolchains fixtures (mixed read-only + expired safe cache) ---"
+          $createdRoots = New-Object System.Collections.Generic.List[string]
+          $createdFiles = New-Object System.Collections.Generic.List[string]
+          $claudeRoot = Join-Path $env:USERPROFILE ".claude"
+          $claudeHist = Join-Path $claudeRoot "file-history"
+          $claudeDbg  = Join-Path $claudeRoot "debug"
+          $pnpmStore  = Join-Path $env:LOCALAPPDATA "pnpm\store"
+          $hfCache    = Join-Path $env:USERPROFILE ".cache\huggingface"
+          $uvCache    = Join-Path $env:LOCALAPPDATA "uv\cache"
+
+          try {
+            $payload8k = New-Object byte[] 8192
+            $payload4k = New-Object byte[] 4096
+
+            if (-not (Test-Path $claudeRoot)) { $createdRoots.Add($claudeRoot) }
+            New-Item -ItemType Directory -Path $claudeHist -Force | Out-Null
+            New-Item -ItemType Directory -Path $claudeDbg  -Force | Out-Null
+            $fHist = Join-Path $claudeHist "ci-fixture.bak"
+            $fDbg  = Join-Path $claudeDbg  "ci-fixture.log"
+            [IO.File]::WriteAllBytes($fHist, $payload8k); $createdFiles.Add($fHist)
+            [IO.File]::WriteAllBytes($fDbg,  $payload8k); $createdFiles.Add($fDbg)
+
+            if (-not (Test-Path $pnpmStore)) { $createdRoots.Add($pnpmStore) }
+            New-Item -ItemType Directory -Path (Join-Path $pnpmStore "v3") -Force | Out-Null
+            $fPnpm = Join-Path $pnpmStore "v3\ci-store.bin"
+            [IO.File]::WriteAllBytes($fPnpm, $payload8k); $createdFiles.Add($fPnpm)
+
+            if (-not (Test-Path $hfCache)) { $createdRoots.Add($hfCache) }
+            New-Item -ItemType Directory -Path (Join-Path $hfCache "hub") -Force | Out-Null
+            $fHf = Join-Path $hfCache "hub\ci-weights.bin"
+            [IO.File]::WriteAllBytes($fHf, $payload8k); $createdFiles.Add($fHf)
+
+            if (-not (Test-Path $uvCache)) { $createdRoots.Add($uvCache) }
+            New-Item -ItemType Directory -Path $uvCache -Force | Out-Null
+            $fUv = Join-Path $uvCache "ci-expired.whl"
+            [IO.File]::WriteAllBytes($fUv, $payload4k); $createdFiles.Add($fUv)
+            [IO.File]::SetLastWriteTimeUtc($fUv, [DateTime]::UtcNow.AddDays(-30))
+
+            # 3A. Claude Code: assert each seeded path individually + 0 reclaimable bytes across the entire zone
+            $cc = Invoke-CliCaptured @("--dry-run", "--json", "--zone", "claude-code")
+            if ($cc.ExitCode -ne 0) { throw "claude-code dry-run failed: ExitCode=$($cc.ExitCode) StdErr=$($cc.StdErr)" }
+            $ccObj = $cc.StdOut | ConvertFrom-Json
+            $ccZone = $ccObj.zones[0]
+            $ccSelectable = @($ccZone.candidates | Where-Object { $_.canSelect -eq $true }).Count
+            $cHist = $ccZone.candidates | Where-Object { $_.path -ieq $claudeHist } | Select-Object -First 1
+            $cDbg  = $ccZone.candidates | Where-Object { $_.path -ieq $claudeDbg  } | Select-Object -First 1
+            if ($ccZone.isReadOnlyZone -ne $true -or $null -eq $cHist -or $null -eq $cDbg -or
+                -not $cHist.isReadOnlyDiagnostic -or $cHist.canSelect -or $cHist.actionType -ne "None" -or $cHist.sizeBytes -lt 8192 -or
+                -not $cDbg.isReadOnlyDiagnostic  -or $cDbg.canSelect  -or $cDbg.actionType  -ne "None" -or $cDbg.sizeBytes  -lt 8192 -or
+                $ccZone.safeOnlineBytes -ne 0 -or $ccZone.recycleCandidateBytes -ne 0 -or $ccZone.offlineCacheBytes -ne 0 -or $ccSelectable -ne 0) {
+              throw "Claude Code per-item read-only contract failed!"
+            }
+            Write-Host "Claude Code per-item fixture verified (file-history=$($cHist.sizeBytes)B, debug=$($cDbg.sizeBytes)B, selectable=0)."
+
+            # 3B. AI Toolchains: assert pnpm/hf are read-only diagnostic AND expired uv cache is independently SafeOnline
+            $tc = Invoke-CliCaptured @("--dry-run", "--json", "--zone", "ai-toolchains")
+            if ($tc.ExitCode -ne 0) { throw "ai-toolchains dry-run failed: ExitCode=$($tc.ExitCode) StdErr=$($tc.StdErr)" }
+            $tcObj = $tc.StdOut | ConvertFrom-Json
+            $tcZone = $tcObj.zones[0]
+            $cPnpm = $tcZone.candidates | Where-Object { $_.path -ieq $pnpmStore } | Select-Object -First 1
+            $cHf   = $tcZone.candidates | Where-Object { $_.path -ieq $hfCache   } | Select-Object -First 1
+            $cUv   = $tcZone.candidates | Where-Object { $_.path -ieq $uvCache   } | Select-Object -First 1
+            if ($null -eq $cPnpm -or -not $cPnpm.isReadOnlyDiagnostic -or $cPnpm.canSelect -or $cPnpm.actionType -ne "None" -or $cPnpm.sizeBytes -lt 8192) {
+              throw "AI Toolchains pnpm/store read-only assertion failed!"
+            }
+            if ($null -eq $cHf -or -not $cHf.isReadOnlyDiagnostic -or $cHf.canSelect -or $cHf.actionType -ne "None" -or $cHf.sizeBytes -lt 8192) {
+              throw "AI Toolchains huggingface read-only assertion failed!"
+            }
+            if ($null -eq $cUv -or $cUv.isReadOnlyDiagnostic -or -not $cUv.canSelect -or $cUv.tier -ne "SafeOnline" -or $cUv.sizeBytes -lt 4096) {
+              throw "AI Toolchains expired uv/cache SafeOnline assertion failed!"
+            }
+            $expectedDiagSum = ($tcZone.candidates | Where-Object { $_.isReadOnlyDiagnostic -eq $true } | Measure-Object -Property sizeBytes -Sum).Sum
+            $expectedSafeSum = ($tcZone.candidates | Where-Object { $_.tier -eq "SafeOnline" -and -not $_.isReadOnlyDiagnostic } | Measure-Object -Property sizeBytes -Sum).Sum
+            if ($tcZone.diagnosticBytes -ne $expectedDiagSum -or $tcZone.safeOnlineBytes -ne $expectedSafeSum) {
+              throw "AI Toolchains byte-bucket separation broken! diag=$($tcZone.diagnosticBytes) vs $expectedDiagSum; safe=$($tcZone.safeOnlineBytes) vs $expectedSafeSum"
+            }
+            Write-Host "AI Toolchains mixed fixture verified (pnpm=$($cPnpm.sizeBytes)B RO, hf=$($cHf.sizeBytes)B RO, uv=$($cUv.sizeBytes)B SafeOnline)."
+          } finally {
+            foreach ($f in $createdFiles) {
+              if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+            }
+            foreach ($r in $createdRoots) {
+              if (Test-Path -LiteralPath $r) { Remove-Item -LiteralPath $r -Recurse -Force -ErrorAction SilentlyContinue }
+            }
+          }
+
+          Write-Host "--- 4. Verifying invalid --zone exit code == 2 ---"
+          $bad = Invoke-CliCaptured @("--dry-run", "--json", "--zone", "does-not-exist")
+          if ($bad.ExitCode -ne 2) { throw "Expected exit code 2 for invalid zone, got $($bad.ExitCode)" }
+          Write-Host "Invalid zone exit code verified (2)."
+
+      - name: Upload verified release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-cleaner-win-x64
+          path: |
+            dist/release/AICleaner-win-x64.zip
+            dist/release/SHA256SUMS.txt
+          retention-days: 14
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: build-and-verify
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-cleaner-win-x64
+          path: release-assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/AICleaner-win-x64.zip
+            release-assets/SHA256SUMS.txt
