@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Text.RegularExpressions;
 
@@ -12,21 +13,62 @@ public static class ZoneScanner
         @"^(clean-windows|e2e-isolated-.*|fixtures-.*|native-e2e-.*|stage-qa.*|build-tmp.*|tmp-stage.*)$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    public static ZoneScanReport ScanZone(ZoneId zone, ZoneProcessInfo? preloadedProc = null)
+    public static ZoneScanReport ScanZone(ZoneId zone, ZoneProcessInfo? preloadedProc = null, CancellationToken ct = default)
     {
+        var sw = Stopwatch.StartNew();
+        var proc = preloadedProc ?? SafetyGuard.GetZoneProcesses(zone);
+        var def = ZoneCatalog.Get(zone);
         var settings = SettingsStore.Load();
-        return zone switch
+
+        try
         {
-            ZoneId.Antigravity => ScanAntigravity(settings, preloadedProc),
-            ZoneId.GptCodex => ScanGptCodex(settings, preloadedProc),
-            ZoneId.DeepSeekHarness => ScanDeepSeekHarness(settings, preloadedProc),
-            _ => new ZoneScanReport { Zone = zone }
-        };
+            ct.ThrowIfCancellationRequested();
+            var report = zone switch
+            {
+                ZoneId.Antigravity => ScanAntigravity(settings, proc, ct),
+                ZoneId.GptCodex => ScanGptCodex(settings, proc, ct),
+                ZoneId.DeepSeekHarness => ScanDeepSeekHarness(settings, proc, ct),
+                ZoneId.ClaudeCode => ScanClaudeCode(proc, ct),
+                ZoneId.AiToolchains => ScanAiToolchains(settings, proc, ct),
+                _ => new ZoneScanReport { Zone = zone, ProcessInfo = proc }
+            };
+            sw.Stop();
+            report.ElapsedMs = sw.ElapsedMilliseconds;
+            report.IsDetected = def.DetectInstalled() || report.Candidates.Count > 0;
+            report.Status = ct.IsCancellationRequested
+                ? ScanStatus.Cancelled
+                : (report.AccessDeniedCount > 0 ? ScanStatus.Partial : ScanStatus.Ok);
+            return report;
+        }
+        catch (OperationCanceledException)
+        {
+            sw.Stop();
+            return new ZoneScanReport
+            {
+                Zone = zone,
+                ProcessInfo = proc,
+                IsDetected = def.DetectInstalled(),
+                Status = ScanStatus.Cancelled,
+                ElapsedMs = sw.ElapsedMilliseconds
+            };
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            return new ZoneScanReport
+            {
+                Zone = zone,
+                ProcessInfo = proc,
+                IsDetected = def.DetectInstalled(),
+                Status = ScanStatus.Error,
+                ErrorMessage = ex.Message,
+                ElapsedMs = sw.ElapsedMilliseconds
+            };
+        }
     }
 
-    private static ZoneScanReport ScanAntigravity(CleanerSettings settings, ZoneProcessInfo? preloadedProc)
+    private static ZoneScanReport ScanAntigravity(CleanerSettings settings, ZoneProcessInfo proc, CancellationToken ct)
     {
-        var proc = preloadedProc ?? SafetyGuard.GetZoneProcesses(ZoneId.Antigravity);
         var report = new ZoneScanReport { Zone = ZoneId.Antigravity, ProcessInfo = proc };
         var list = report.Candidates;
         int tempDays = settings.TempMinAgeDays;
@@ -35,7 +77,8 @@ public static class ZoneScanner
         string updaterPending = Path.Combine(LocalApp, @"antigravity-updater\pending");
         if (Directory.Exists(updaterPending))
         {
-            var st = SafetyGuard.MeasureDirectory(updaterPending);
+            var st = SafetyGuard.MeasureDirectory(updaterPending, ct);
+            report.AccessDeniedCount += st.AccessDeniedCount;
             if (st.TotalBytes > 0)
             {
                 bool wl = SettingsStore.IsWhitelisted(updaterPending);
@@ -62,40 +105,40 @@ public static class ZoneScanner
         }
 
         // 2. Safe Online: .gemini/antigravity/cache, crashes, logs, scratch
-        AddOnlineSweepCandidate(list, ZoneId.Antigravity,
+        AddOnlineSweepCandidate(report, ZoneId.Antigravity,
             "Antigravity 内部缓存 (.gemini/antigravity/cache)",
             "运行缓存",
             Path.Combine(UserHome, @".gemini\antigravity\cache"),
             minAgeDays: tempDays, pruneEmpty: true,
-            reason: $"超 {tempDays} 天未占用的临时缓存文件，在线可安全清理");
+            reason: $"超 {tempDays} 天未占用的临时缓存文件，在线可安全清理", ct);
 
-        AddOnlineSweepCandidate(list, ZoneId.Antigravity,
+        AddOnlineSweepCandidate(report, ZoneId.Antigravity,
             "崩溃转储与日志 (.gemini/antigravity/crashes)",
             "崩溃日志",
             Path.Combine(UserHome, @".gemini\antigravity\crashes"),
             minAgeDays: tempDays, pruneEmpty: true,
-            reason: $"超 {tempDays} 天历史崩溃日志，在线可安全清理");
+            reason: $"超 {tempDays} 天历史崩溃日志，在线可安全清理", ct);
 
-        AddOnlineSweepCandidate(list, ZoneId.Antigravity,
+        AddOnlineSweepCandidate(report, ZoneId.Antigravity,
             "Gemini 日志 (.gemini/logs)",
             "运行日志",
             Path.Combine(UserHome, @".gemini\logs"),
             minAgeDays: tempDays, pruneEmpty: true,
-            reason: $"超 {tempDays} 天旧日志文件");
+            reason: $"超 {tempDays} 天旧日志文件", ct);
 
-        AddOnlineSweepCandidate(list, ZoneId.Antigravity,
+        AddOnlineSweepCandidate(report, ZoneId.Antigravity,
             "桌面客户端日志 (Roaming/Antigravity/logs)",
             "运行日志",
             Path.Combine(Roaming, @"Antigravity\logs"),
             minAgeDays: tempDays, pruneEmpty: true,
-            reason: $"超 {tempDays} 天旧客户端日志");
+            reason: $"超 {tempDays} 天旧客户端日志", ct);
 
-        AddOnlineSweepCandidate(list, ZoneId.Antigravity,
+        AddOnlineSweepCandidate(report, ZoneId.Antigravity,
             "旧草稿区 (.gemini/antigravity/scratch)",
             "临时草稿",
             Path.Combine(UserHome, @".gemini\antigravity\scratch"),
             minAgeDays: settings.WorkspaceMinAgeDays, pruneEmpty: true,
-            reason: $"超 {settings.WorkspaceMinAgeDays} 天未修改的临时草稿文件");
+            reason: $"超 {settings.WorkspaceMinAgeDays} 天未修改的临时草稿文件", ct);
 
         // 3. Yellow Zone: Old conversation brain artifacts (>WorkspaceMinAgeDays) & custom ExtraBackupDirs
         string brainDir = Path.Combine(UserHome, @".gemini\antigravity\brain");
@@ -104,8 +147,10 @@ public static class ZoneScanner
             var nowUtc = DateTime.UtcNow;
             foreach (var sub in new DirectoryInfo(brainDir).EnumerateDirectories())
             {
+                ct.ThrowIfCancellationRequested();
                 if (SafetyGuard.IsReparsePoint(sub)) continue;
-                var st = SafetyGuard.MeasureDirectory(sub.FullName);
+                var st = SafetyGuard.MeasureDirectory(sub.FullName, ct);
+                report.AccessDeniedCount += st.AccessDeniedCount;
                 if (st.TotalBytes < 10L * 1024 * 1024) continue;
 
                 bool wl = SettingsStore.IsWhitelisted(sub.FullName);
@@ -155,8 +200,10 @@ public static class ZoneScanner
         // 3.5 Optional user-configured backup folders (via settings.json ExtraBackupDirs)
         foreach (var backupDir in settings.ExtraBackupDirs)
         {
-            if (string.IsNullOrWhiteSpace(backupDir) || !Directory.Exists(backupDir)) continue;
-            var st = SafetyGuard.MeasureDirectory(backupDir);
+            ct.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(backupDir) || !SafetyGuard.ValidateCustomRootPath(backupDir, out _) || !Directory.Exists(backupDir)) continue;
+            var st = SafetyGuard.MeasureDirectory(backupDir, ct);
+            report.AccessDeniedCount += st.AccessDeniedCount;
             if (st.TotalBytes <= 0) continue;
             bool wl = SettingsStore.IsWhitelisted(backupDir);
             list.Add(new CleanCandidate
@@ -180,27 +227,28 @@ public static class ZoneScanner
 
         // 4. Offline Cache: Roaming/Antigravity & Partitions & Antigravity IDE (preserves Network/LocalStorage/IndexedDB/Service Worker Database)
         string agRoaming = Path.Combine(Roaming, "Antigravity");
-        AddOfflineCacheDirs(list, ZoneId.Antigravity, proc.IsRunning, agRoaming,
+        AddOfflineCacheDirs(report, ZoneId.Antigravity, proc.IsRunning, agRoaming,
             new[] { "Cache", "CachedData", "Code Cache", "GPUCache", "GrShaderCache", "ShaderCache", "DawnGraphiteCache", "DawnWebGPUCache", "blob_storage", @"Service Worker\CacheStorage", @"Crashpad\reports", @"Crashpad\pending" },
-            "Antigravity 浏览器缓存");
+            "Antigravity 浏览器缓存", ct);
 
         string agPartitions = Path.Combine(agRoaming, "Partitions");
         if (Directory.Exists(agPartitions))
         {
             foreach (var part in new DirectoryInfo(agPartitions).EnumerateDirectories())
             {
-                AddOfflineCacheDirs(list, ZoneId.Antigravity, proc.IsRunning, part.FullName,
+                ct.ThrowIfCancellationRequested();
+                AddOfflineCacheDirs(report, ZoneId.Antigravity, proc.IsRunning, part.FullName,
                     new[] { "Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", @"Service Worker\CacheStorage" },
-                    $"内置浏览器分区 ({part.Name})");
+                    $"内置浏览器分区 ({part.Name})", ct);
             }
         }
 
         string agIdeRoaming = Path.Combine(Roaming, "Antigravity IDE");
         if (Directory.Exists(agIdeRoaming))
         {
-            AddOfflineCacheDirs(list, ZoneId.Antigravity, proc.IsRunning, agIdeRoaming,
+            AddOfflineCacheDirs(report, ZoneId.Antigravity, proc.IsRunning, agIdeRoaming,
                 new[] { "Cache", "CachedData", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", @"Crashpad\reports", @"Crashpad\pending" },
-                "Antigravity IDE 缓存");
+                "Antigravity IDE 缓存", ct);
         }
 
         // 5. Red-Zone transparency items
@@ -217,90 +265,72 @@ public static class ZoneScanner
         return report;
     }
 
-    private static ZoneScanReport ScanGptCodex(CleanerSettings settings, ZoneProcessInfo? preloadedProc)
+    private static ZoneScanReport ScanGptCodex(CleanerSettings settings, ZoneProcessInfo proc, CancellationToken ct)
     {
-        var proc = preloadedProc ?? SafetyGuard.GetZoneProcesses(ZoneId.GptCodex);
         var report = new ZoneScanReport { Zone = ZoneId.GptCodex, ProcessInfo = proc };
         var list = report.Candidates;
         int tempDays = settings.TempMinAgeDays;
 
-        // 1. Safe Online: CustomCodexCacheRoot (if configured) + standard local uv/pip/npm caches + workspace scratch
+        // 1. Safe Online: CustomCodexCacheRoot (if configured & validated) + workspace scratch
         string customCache = settings.CustomCodexCacheRoot;
-        if (!string.IsNullOrWhiteSpace(customCache) && Directory.Exists(customCache))
+        bool validCustomCache = !string.IsNullOrWhiteSpace(customCache) &&
+            SafetyGuard.ValidateCustomRootPath(customCache, out _) &&
+            Directory.Exists(customCache);
+        if (validCustomCache)
         {
-            AddOnlineSweepCandidate(list, ZoneId.GptCodex,
+            AddOnlineSweepCandidate(report, ZoneId.GptCodex,
                 "Codex 临时缓存 (temp)",
                 "运行临时文件",
                 Path.Combine(customCache, "temp"),
                 minAgeDays: tempDays, pruneEmpty: true,
-                reason: $"超过 {tempDays} 天且未被 ChatGPT.exe 占用的临时文件，自动跳过所有目录联接与占用锁");
+                reason: $"超过 {tempDays} 天且未被 ChatGPT.exe 占用的临时文件，自动跳过所有目录联接与占用锁", ct);
 
-            AddOnlineSweepCandidate(list, ZoneId.GptCodex,
+            AddOnlineSweepCandidate(report, ZoneId.GptCodex,
                 "Pip 下载缓存 (pip)",
                 "包管理缓存",
                 Path.Combine(customCache, "pip"),
                 minAgeDays: 14, pruneEmpty: true,
-                reason: "超过 14 天的 Python 包下载缓存");
+                reason: "超过 14 天的 Python 包下载缓存", ct);
 
-            AddOnlineSweepCandidate(list, ZoneId.GptCodex,
+            AddOnlineSweepCandidate(report, ZoneId.GptCodex,
                 "NPM 下载缓存 (npm)",
                 "包管理缓存",
                 Path.Combine(customCache, "npm"),
                 minAgeDays: 14, pruneEmpty: true,
-                reason: "超过 14 天的 Node 包下载缓存");
+                reason: "超过 14 天的 Node 包下载缓存", ct);
 
-            AddOnlineSweepCandidate(list, ZoneId.GptCodex,
+            AddOnlineSweepCandidate(report, ZoneId.GptCodex,
                 "UV 下载缓存 (uv)",
                 "包管理缓存",
                 Path.Combine(customCache, "uv"),
                 minAgeDays: 14, pruneEmpty: true,
-                reason: "超过 14 天的 uv Python 包下载缓存");
+                reason: "超过 14 天的 uv Python 包下载缓存", ct);
         }
 
-        // Standard shared AI agent package caches on Windows (skips NTFS junctions!)
-        string localUvCache = Path.Combine(LocalApp, @"uv\cache");
-        if (Directory.Exists(localUvCache) && !SafetyGuard.IsReparsePoint(localUvCache))
+        // Aggregated safe workspace scratch across validated ExtraWorkspaceRoots (>72h & 0 junctions)
+        var validWsRoots = settings.ExtraWorkspaceRoots
+            .Where(r => SafetyGuard.ValidateCustomRootPath(r, out _) && Directory.Exists(r))
+            .ToArray();
+        if (validWsRoots.Length > 0)
         {
-            AddOnlineSweepCandidate(list, ZoneId.GptCodex,
-                @"AI 生态 UV 全局包缓存 (AppData\Local\uv\cache)",
-                "包管理缓存",
-                localUvCache,
-                minAgeDays: Math.Max(tempDays, 7), pruneEmpty: true,
-                reason: $"超过 {Math.Max(tempDays, 7)} 天的 uv 工具下载缓存，清理后按需自动重下（不影响已安装虚拟环境）");
-        }
-
-        string localPipCache = Path.Combine(LocalApp, @"pip\Cache");
-        if (Directory.Exists(localPipCache) && !SafetyGuard.IsReparsePoint(localPipCache))
-        {
-            AddOnlineSweepCandidate(list, ZoneId.GptCodex,
-                @"Pip 全局包缓存 (AppData\Local\pip\Cache)",
-                "包管理缓存",
-                localPipCache,
-                minAgeDays: 14, pruneEmpty: true,
-                reason: "超过 14 天的 Python pip 下载缓存（自动跳过联接）");
-        }
-
-        // Aggregated safe workspace scratch across user-configured ExtraWorkspaceRoots (>72h & 0 junctions)
-        if (settings.ExtraWorkspaceRoots.Count > 0)
-        {
-            AddWorkspaceScratchBatchCandidate(list, settings.ExtraWorkspaceRoots.ToArray());
-            ScanGptWorkspaceCandidates(list, settings);
+            AddWorkspaceScratchBatchCandidate(list, validWsRoots, ct);
+            ScanGptWorkspaceCandidates(report, settings, validWsRoots, ct);
         }
 
         // 3. Offline Cache: CustomCodexCacheRoot browser-cache & desktop-logs (keeps full folder skeleton for MSIX junctions)
-        if (!string.IsNullOrWhiteSpace(customCache) && Directory.Exists(customCache))
+        if (validCustomCache)
         {
-            AddOfflineSingleDir(list, ZoneId.GptCodex, proc.IsRunning,
+            AddOfflineSingleDir(report, ZoneId.GptCodex, proc.IsRunning,
                 "ChatGPT/Codex 浏览器缓存 (browser-cache)",
                 Path.Combine(customCache, "browser-cache"),
                 minAgeDays: 0,
-                reason: "仅清内部缓存文件，完整保留全部子目录骨架与 MSIX 联接目标");
+                reason: "仅清内部缓存文件，完整保留全部子目录骨架与 MSIX 联接目标", ct);
 
-            AddOfflineSingleDir(list, ZoneId.GptCodex, proc.IsRunning,
+            AddOfflineSingleDir(report, ZoneId.GptCodex, proc.IsRunning,
                 "Codex 桌面旧日志 (desktop-logs)",
                 Path.Combine(customCache, "desktop-logs"),
                 minAgeDays: tempDays,
-                reason: $"超过 {tempDays} 天的历史桌面日志，保留目录本身");
+                reason: $"超过 {tempDays} 天的历史桌面日志，保留目录本身", ct);
 
             AddProtectedInfoItem(list, ZoneId.GptCodex, "Codex 运行环境 (runtimes)",
                 Path.Combine(customCache, "runtimes"), "红区硬保护：桌面端内置 Node/运行时，严禁删除");
@@ -319,7 +349,7 @@ public static class ZoneScanner
         return report;
     }
 
-    private static void AddWorkspaceScratchBatchCandidate(List<CleanCandidate> list, string[] roots)
+    private static void AddWorkspaceScratchBatchCandidate(List<CleanCandidate> list, string[] roots, CancellationToken ct)
     {
         var targetNames = SafetyGuard.AllowedBatchScratchNames;
         var skipNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -333,12 +363,14 @@ public static class ZoneScanner
 
         foreach (var root in roots)
         {
+            ct.ThrowIfCancellationRequested();
             if (!Directory.Exists(root)) continue;
             var stack = new Stack<(string Dir, int Depth)>();
             stack.Push((root, 0));
 
             while (stack.Count > 0)
             {
+                ct.ThrowIfCancellationRequested();
                 var (curr, depth) = stack.Pop();
                 if (depth > 5) continue;
                 DirectoryInfo di;
@@ -349,13 +381,14 @@ public static class ZoneScanner
                 {
                     foreach (var d in di.EnumerateDirectories())
                     {
+                        ct.ThrowIfCancellationRequested();
                         try
                         {
                             if (SafetyGuard.IsReparsePoint(d) || skipNames.Contains(d.Name)) continue;
                             if (targetNames.Contains(d.Name))
                             {
                                 if (SafetyGuard.IsProtectedPath(d.FullName)) continue;
-                                var st = SafetyGuard.MeasureDirectory(d.FullName);
+                                var st = SafetyGuard.MeasureDirectory(d.FullName, ct);
                                 if (st.JunctionCount > 0 || st.NewestWriteUtc > cutoffUtc) continue;
                                 matchedPaths.Add(d.FullName);
                                 totalBytes += st.TotalBytes;
@@ -365,9 +398,11 @@ public static class ZoneScanner
                             }
                             if (depth + 1 <= 5) stack.Push((d.FullName, depth + 1));
                         }
+                        catch (OperationCanceledException) { throw; }
                         catch { }
                     }
                 }
+                catch (OperationCanceledException) { throw; }
                 catch { }
             }
         }
@@ -394,15 +429,17 @@ public static class ZoneScanner
         }
     }
 
-    private static void ScanGptWorkspaceCandidates(List<CleanCandidate> list, CleanerSettings settings)
+    private static void ScanGptWorkspaceCandidates(ZoneScanReport report, CleanerSettings settings, string[] validWsRoots, CancellationToken ct)
     {
+        var list = report.Candidates;
         var nowUtc = DateTime.UtcNow;
         long minBytes = (long)settings.WorkspaceMinSizeMB * 1024L * 1024L;
         int minAgeDays = settings.WorkspaceMinAgeDays;
         var targets = new List<(string Path, string Category, bool IsFile)>();
 
-        foreach (var wsMain in settings.ExtraWorkspaceRoots)
+        foreach (var wsMain in validWsRoots)
         {
+            ct.ThrowIfCancellationRequested();
             if (string.IsNullOrWhiteSpace(wsMain) || !Directory.Exists(wsMain)) continue;
 
             string workDir = Path.Combine(wsMain, "work");
@@ -432,13 +469,14 @@ public static class ZoneScanner
         }
 
         var bag = new System.Collections.Concurrent.ConcurrentBag<CleanCandidate>();
-        Parallel.ForEach(targets, new ParallelOptions { MaxDegreeOfParallelism = 6 }, t =>
+        int deniedAccum = 0;
+        Parallel.ForEach(targets, new ParallelOptions { MaxDegreeOfParallelism = 6, CancellationToken = ct }, t =>
         {
+            ct.ThrowIfCancellationRequested();
             string leaf = Path.GetFileName(t.Path);
             bool isHardProt = SafetyGuard.IsProtectedPath(t.Path, includeUserWhitelist: false);
             if (isHardProt)
             {
-                // Skip expensive 40,000+ file recursive crawl on already-hard-protected tool/source dirs!
                 bag.Add(new CleanCandidate
                 {
                     Zone = ZoneId.GptCodex,
@@ -472,7 +510,8 @@ public static class ZoneScanner
             }
             else
             {
-                var st = SafetyGuard.MeasureDirectory(t.Path);
+                var st = SafetyGuard.MeasureDirectory(t.Path, ct);
+                if (st.AccessDeniedCount > 0) Interlocked.Add(ref deniedAccum, st.AccessDeniedCount);
                 sz = st.TotalBytes;
                 files = st.FileCount;
                 juncs = st.JunctionCount;
@@ -566,12 +605,12 @@ public static class ZoneScanner
                 });
             }
         });
+        report.AccessDeniedCount += deniedAccum;
         list.AddRange(bag);
     }
 
-    private static ZoneScanReport ScanDeepSeekHarness(CleanerSettings settings, ZoneProcessInfo? preloadedProc)
+    private static ZoneScanReport ScanDeepSeekHarness(CleanerSettings settings, ZoneProcessInfo proc, CancellationToken ct)
     {
-        var proc = preloadedProc ?? SafetyGuard.GetZoneProcesses(ZoneId.DeepSeekHarness);
         var report = new ZoneScanReport { Zone = ZoneId.DeepSeekHarness, ProcessInfo = proc };
         var list = report.Candidates;
         int tempDays = settings.TempMinAgeDays;
@@ -580,7 +619,8 @@ public static class ZoneScanner
         string dshPending = Path.Combine(LocalApp, @"@deepseek-aidsh-desktop-updater\pending");
         if (Directory.Exists(dshPending))
         {
-            var st = SafetyGuard.MeasureDirectory(dshPending);
+            var st = SafetyGuard.MeasureDirectory(dshPending, ct);
+            report.AccessDeniedCount += st.AccessDeniedCount;
             if (st.TotalBytes > 0)
             {
                 bool wl = SettingsStore.IsWhitelisted(dshPending);
@@ -599,26 +639,26 @@ public static class ZoneScanner
                     CanSelect = !wl && st.JunctionCount == 0,
                     IsRecommended = !wl,
                     IsUserWhitelisted = wl,
-                    Reason = wl ? "已加入用户白名单，永久保留" : "安装完毕后残留的 0.2.2-rc.3 安装程序，移入回收站可还原",
+                    Reason = wl ? "已加入用户白名单，永久保留" : "安装完毕后残留的更新安装程序，移入回收站可还原",
                     ActionHint = "移入 Windows 回收站（保留目录）"
                 });
             }
         }
 
         // 2. Safe Online: .dsh/cache & desktop logs
-        AddOnlineSweepCandidate(list, ZoneId.DeepSeekHarness,
+        AddOnlineSweepCandidate(report, ZoneId.DeepSeekHarness,
             "DSH 内部缓存 (.dsh/cache)",
             "运行缓存",
             Path.Combine(UserHome, @".dsh\cache"),
             minAgeDays: Math.Max(tempDays, 7), pruneEmpty: true,
-            reason: $"超过 {Math.Max(tempDays, 7)} 天未占用的附件与临时缓存");
+            reason: $"超过 {Math.Max(tempDays, 7)} 天未占用的附件与临时缓存", ct);
 
-        AddOnlineSweepCandidate(list, ZoneId.DeepSeekHarness,
+        AddOnlineSweepCandidate(report, ZoneId.DeepSeekHarness,
             "DSH 桌面日志 (Roaming/@deepseek-ai/dsh-desktop/logs)",
             "运行日志",
             Path.Combine(Roaming, @"@deepseek-ai\dsh-desktop\logs"),
             minAgeDays: tempDays, pruneEmpty: true,
-            reason: $"超过 {tempDays} 天的历史客户端日志");
+            reason: $"超过 {tempDays} 天的历史客户端日志", ct);
 
         // 3. Yellow Zone: profile-backups & >14d old attachments
         string profBackups = Path.Combine(UserHome, @".dsh\profile-backups");
@@ -626,7 +666,9 @@ public static class ZoneScanner
         {
             foreach (var sub in new DirectoryInfo(profBackups).EnumerateDirectories())
             {
-                var st = SafetyGuard.MeasureDirectory(sub.FullName);
+                ct.ThrowIfCancellationRequested();
+                var st = SafetyGuard.MeasureDirectory(sub.FullName, ct);
+                report.AccessDeniedCount += st.AccessDeniedCount;
                 if (st.TotalBytes < 1024 * 1024) continue;
                 bool wl = SettingsStore.IsWhitelisted(sub.FullName);
                 bool active = (DateTime.UtcNow - st.NewestWriteUtc).TotalHours < SafetyGuard.HardActiveFloorHours;
@@ -654,7 +696,8 @@ public static class ZoneScanner
         string dshAttach = Path.Combine(UserHome, @".dsh\attachments");
         if (Directory.Exists(dshAttach))
         {
-            var sw = SafetyGuard.SweepFiles(dshAttach, minAgeDays: 14, doApply: false, pruneEmptySubdirs: false);
+            var sw = SafetyGuard.SweepFiles(dshAttach, minAgeDays: 14, doApply: false, pruneEmptySubdirs: false, ct);
+            report.AccessDeniedCount += sw.AccessDeniedCount;
             if (sw.EligibleBytes > 0)
             {
                 bool wl = SettingsStore.IsWhitelisted(dshAttach);
@@ -684,18 +727,19 @@ public static class ZoneScanner
         string dshRoaming = Path.Combine(Roaming, @"@deepseek-ai\dsh-desktop");
         if (Directory.Exists(dshRoaming))
         {
-            AddOfflineCacheDirs(list, ZoneId.DeepSeekHarness, proc.IsRunning, dshRoaming,
+            AddOfflineCacheDirs(report, ZoneId.DeepSeekHarness, proc.IsRunning, dshRoaming,
                 new[] { "Cache", "CachedData", "Code Cache", "GPUCache", "GrShaderCache", "ShaderCache", "DawnGraphiteCache", "DawnWebGPUCache", "blob_storage", @"Service Worker\CacheStorage", @"Crashpad\reports", @"Crashpad\pending" },
-                "DeepSeek Harness 浏览器缓存");
+                "DeepSeek Harness 浏览器缓存", ct);
 
             string dshPartitions = Path.Combine(dshRoaming, "Partitions");
             if (Directory.Exists(dshPartitions))
             {
                 foreach (var part in new DirectoryInfo(dshPartitions).EnumerateDirectories())
                 {
-                    AddOfflineCacheDirs(list, ZoneId.DeepSeekHarness, proc.IsRunning, part.FullName,
+                    ct.ThrowIfCancellationRequested();
+                    AddOfflineCacheDirs(report, ZoneId.DeepSeekHarness, proc.IsRunning, part.FullName,
                         new[] { "Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", @"Service Worker\CacheStorage" },
-                        $"DSH 浏览器分区 ({part.Name})");
+                        $"DSH 浏览器分区 ({part.Name})", ct);
                 }
             }
         }
@@ -714,17 +758,275 @@ public static class ZoneScanner
         return report;
     }
 
-    private static void AddOnlineSweepCandidate(
-        List<CleanCandidate> list, ZoneId zone, string title, string category,
-        string path, int minAgeDays, bool pruneEmpty, string reason)
+    // === ZONE 4: Claude Code (v3.0 Strictly Read-Only Diagnostic Mode — ZERO Deletions!) ===
+    private static ZoneScanReport ScanClaudeCode(ZoneProcessInfo proc, CancellationToken ct) =>
+        ScanClaudeDirectory(Path.Combine(UserHome, ".claude"), proc, ct);
+
+    /// <summary>Testable entry point for Claude Code strict read-only diagnostic scanning (never traverses junctions, submits ZERO deletable candidates).</summary>
+    public static ZoneScanReport ScanClaudeDirectory(string claudeRoot, ZoneProcessInfo proc, CancellationToken ct = default)
     {
+        var report = new ZoneScanReport { Zone = ZoneId.ClaudeCode, ProcessInfo = proc };
+        var list = report.Candidates;
+        if (!Directory.Exists(claudeRoot))
+            return report;
+        if (SafetyGuard.HasReparsePointInChain(claudeRoot))
+        {
+            list.Add(new CleanCandidate
+            {
+                Zone = ZoneId.ClaudeCode,
+                Tier = CleanTier.ProtectedSkipped,
+                ActionType = CleanActionType.None,
+                IsReadOnlyDiagnostic = true,
+                Title = "Claude 根目录含 NTFS 目录联接（已跳过）",
+                Category = "联接保护",
+                Path = claudeRoot,
+                SizeBytes = 0,
+                FileCount = 0,
+                JunctionCount = 1,
+                CanSelect = false,
+                Reason = "检测到根目录或其祖先链包含 NTFS 目录联接/符号链接，已严格跳过遍历",
+                ActionHint = "只读保护（不穿越联接）"
+            });
+            return report;
+        }
+
+        var knownMeta = new Dictionary<string, (string Title, string Category, string Reason)>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["debug"] = ("Claude 调试日志 (.claude/debug)", "只读诊断", "只读体积盘点：v3.0 暂不自动清理，可右键「空间雷达」查看明细"),
+            ["file-history"] = ("编辑历史回滚副本 (.claude/file-history)", "回滚保护", "硬保护只读：保存用户文件编辑历史，清理会永久丢失历史回滚版本"),
+            ["shell-snapshots"] = ("Shell 环境快照 (.claude/shell-snapshots)", "环境快照", "硬保护只读：生命周期未声明为临时缓存，v3.0 严格只读展示"),
+            ["projects"] = ("项目会话记录 (.claude/projects)", "核心会话", "红区硬保护：包含全部 Claude Code 会话历史，严禁清理"),
+            ["todos"] = ("任务列表 (.claude/todos)", "会话状态", "只读展示：保存历史任务状态，严禁自动删除"),
+            ["plans"] = ("规划文档 (.claude/plans)", "规划记录", "只读展示：保存历史工程计划，严禁自动删除"),
+            ["cache"] = ("Claude 内部缓存 (.claude/cache)", "只读诊断", "只读盘点：支持通过「空间雷达」下钻查看")
+        };
+
+        try
+        {
+            foreach (var sub in new DirectoryInfo(claudeRoot).EnumerateDirectories())
+            {
+                ct.ThrowIfCancellationRequested();
+                bool isRp = SafetyGuard.IsReparsePoint(sub);
+                if (isRp)
+                {
+                    list.Add(new CleanCandidate
+                    {
+                        Zone = ZoneId.ClaudeCode,
+                        Tier = CleanTier.ProtectedSkipped,
+                        ActionType = CleanActionType.None,
+                        IsReadOnlyDiagnostic = true,
+                        Title = $"目录联接 (.claude/{sub.Name})",
+                        Category = "联接保护",
+                        Path = sub.FullName,
+                        SizeBytes = 0,
+                        FileCount = 0,
+                        JunctionCount = 1,
+                        NewestWriteLocal = sub.LastWriteTime,
+                        CanSelect = false,
+                        Reason = "NTFS 目录联接：已自动跳过遍历与任何清理操作",
+                        ActionHint = "只读保护（不穿越联接）"
+                    });
+                    continue;
+                }
+
+                var st = SafetyGuard.MeasureDirectory(sub.FullName, ct);
+                report.AccessDeniedCount += st.AccessDeniedCount;
+
+                bool known = knownMeta.TryGetValue(sub.Name, out var meta);
+                string title = known ? meta.Title : $"其他子目录 (.claude/{sub.Name})";
+                string cat = known ? meta.Category : "只读诊断";
+                string reason = known ? meta.Reason : "未知或扩展目录：遵循红队安全原则仅做只读展示，严禁猜测清理";
+                if (st.JunctionCount > 0) reason += $"（内部已跳过 {st.JunctionCount} 个目录联接）";
+
+                list.Add(new CleanCandidate
+                {
+                    Zone = ZoneId.ClaudeCode,
+                    Tier = CleanTier.ProtectedSkipped,
+                    ActionType = CleanActionType.None,
+                    IsReadOnlyDiagnostic = true,
+                    Title = title,
+                    Category = cat,
+                    Path = sub.FullName,
+                    SizeBytes = st.TotalBytes,
+                    FileCount = st.FileCount,
+                    JunctionCount = st.JunctionCount,
+                    NewestWriteLocal = st.NewestWriteUtc == DateTime.MinValue ? sub.LastWriteTime : st.NewestWriteUtc.ToLocalTime(),
+                    CanSelect = false,
+                    Reason = reason,
+                    ActionHint = "仅限只读诊断与空间雷达透视"
+                });
+            }
+        }
+        catch (UnauthorizedAccessException)
+        {
+            report.AccessDeniedCount++;
+        }
+
+        // O(1) core config / credentials transparency item
+        string claudeSettings = Path.Combine(claudeRoot, "settings.json");
+        if (File.Exists(claudeSettings))
+        {
+            AddProtectedInfoItem(list, ZoneId.ClaudeCode, "Claude 核心配置与凭据 (.claude/settings.json)",
+                claudeRoot, "红区硬保护：包含账号配置、MCP 设置与凭据，严禁触碰");
+        }
+
+        report.Candidates = list
+            .OrderByDescending(c => c.SizeBytes)
+            .ThenBy(c => c.Title, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return report;
+    }
+
+    // === ZONE 5: AI Toolchains & Local Model Radar ===
+    private static ZoneScanReport ScanAiToolchains(CleanerSettings settings, ZoneProcessInfo proc, CancellationToken ct)
+    {
+        var report = new ZoneScanReport { Zone = ZoneId.AiToolchains, ProcessInfo = proc };
+        var list = report.Candidates;
+        int tempDays = settings.TempMinAgeDays;
+
+        // 1. Safe Online: verified ephemeral package download caches (STRICTLY skip if NTFS Junction anywhere in ancestor chain!)
+        void AddSharedPkgCache(string title, string path, int ageDays, string reason)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!Directory.Exists(path)) return;
+            if (SafetyGuard.HasReparsePointInChain(path))
+            {
+                list.Add(new CleanCandidate
+                {
+                    Zone = ZoneId.AiToolchains,
+                    Tier = CleanTier.ProtectedSkipped,
+                    ActionType = CleanActionType.None,
+                    IsReadOnlyDiagnostic = true,
+                    Title = $"{title}（NTFS 联接已跳过）",
+                    Category = "联接保护",
+                    Path = path,
+                    SizeBytes = 0,
+                    JunctionCount = 1,
+                    CanSelect = false,
+                    Reason = "检测到该缓存目录或其祖先链包含 NTFS 目录联接（已重定向至其他磁盘），自动跳过防止重复统计与误操作",
+                    ActionHint = "只读保护（联接）"
+                });
+                return;
+            }
+            AddOnlineSweepCandidate(report, ZoneId.AiToolchains, title, "AI 工具链缓存", path, ageDays, pruneEmpty: true, reason, ct);
+        }
+
+        AddSharedPkgCache(@"UV 全局包下载缓存 (AppData\Local\uv\cache)", Path.Combine(LocalApp, @"uv\cache"),
+            Math.Max(tempDays, 7), $"超过 {Math.Max(tempDays, 7)} 天的 uv 下载缓存，清理后按需自动重下（不影响已建虚拟环境）");
+        AddSharedPkgCache(@"Pip 全局下载缓存 (AppData\Local\pip\Cache)", Path.Combine(LocalApp, @"pip\Cache"),
+            14, "超过 14 天的 Python pip 下载缓存");
+        AddSharedPkgCache(@"NPM 全局下载缓存 (AppData\Local\npm-cache)", Path.Combine(LocalApp, "npm-cache"),
+            14, "超过 14 天的 Node npm 下载缓存");
+        AddSharedPkgCache(@"NPM 全局下载缓存 (AppData\Roaming\npm-cache)", Path.Combine(Roaming, "npm-cache"),
+            14, "超过 14 天的 Node npm 下载缓存");
+
+        // 2. Strictly Read-Only Diagnostic Radar (NEVER auto-deleted, NEVER counted in reclaimable bytes!)
+        void AddReadOnlyRadarDir(string title, string category, string path, string reason)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!Directory.Exists(path)) return;
+            if (SafetyGuard.HasReparsePointInChain(path))
+            {
+                list.Add(new CleanCandidate
+                {
+                    Zone = ZoneId.AiToolchains,
+                    Tier = CleanTier.ProtectedSkipped,
+                    ActionType = CleanActionType.None,
+                    IsReadOnlyDiagnostic = true,
+                    Title = $"{title}（联接跳过）",
+                    Category = category,
+                    Path = path,
+                    SizeBytes = 0,
+                    JunctionCount = 1,
+                    CanSelect = false,
+                    Reason = "目录或其祖先链含 NTFS 目录联接，仅记录不穿越",
+                    ActionHint = "只读雷达"
+                });
+                return;
+            }
+            var st = SafetyGuard.MeasureDirectory(path, ct);
+            report.AccessDeniedCount += st.AccessDeniedCount;
+            if (st.TotalBytes <= 0 && st.FileCount == 0) return;
+            list.Add(new CleanCandidate
+            {
+                Zone = ZoneId.AiToolchains,
+                Tier = CleanTier.ProtectedSkipped,
+                ActionType = CleanActionType.None,
+                IsReadOnlyDiagnostic = true,
+                Title = title,
+                Category = category,
+                Path = path,
+                SizeBytes = st.TotalBytes,
+                FileCount = st.FileCount,
+                JunctionCount = st.JunctionCount,
+                NewestWriteLocal = st.NewestWriteUtc == DateTime.MinValue ? Directory.GetLastWriteTime(path) : st.NewestWriteUtc.ToLocalTime(),
+                CanSelect = false,
+                Reason = reason,
+                ActionHint = "仅限只读空间雷达查看，不参与自动清理"
+            });
+        }
+
+        // pnpm store: hardlinked content-addressable store — NEVER sweep!
+        AddReadOnlyRadarDir(@"pnpm 内容寻址库 (AppData\Local\pnpm\store)", "硬链接只读雷达",
+            Path.Combine(LocalApp, @"pnpm\store"),
+            "只读诊断（不计入可释放量）：pnpm 使用 NTFS 硬链接，直接删文件会破坏离线安装且虚报释放空间；如需瘦身请在终端手动执行 pnpm store prune");
+
+        // Playwright & Puppeteer: pinned browser revisions — NEVER delete by age!
+        string pwDir = Path.Combine(LocalApp, "ms-playwright");
+        if (Directory.Exists(pwDir))
+        {
+            if (SafetyGuard.HasReparsePointInChain(pwDir))
+            {
+                AddReadOnlyRadarDir("Playwright 浏览器运行时", "浏览器只读雷达", pwDir,
+                    "只读盘点：严禁按天数自动删除项目依赖的浏览器修订版");
+            }
+            else
+            {
+                var revs = new DirectoryInfo(pwDir).EnumerateDirectories().Select(d => d.Name).Take(6).ToList();
+                string revHint = revs.Count > 0 ? $"（已安装：{string.Join(", ", revs)}{(revs.Count >= 6 ? "..." : "")}）" : "";
+                AddReadOnlyRadarDir($"Playwright 浏览器运行时 {revHint}", "浏览器只读雷达", pwDir,
+                    "只读盘点：旧版本浏览器可能是其他项目锁定的离线测试依赖，严禁按天数自动删除；请用「空间雷达」按需核查");
+            }
+        }
+        AddReadOnlyRadarDir(@"Puppeteer 浏览器缓存 (.cache\puppeteer)", "浏览器只读雷达",
+            Path.Combine(UserHome, @".cache\puppeteer"),
+            "只读盘点：严禁按天数自动删除项目依赖的浏览器修订版");
+
+        // Local Model Caches: Hugging Face / ModelScope / Ollama / LM Studio — NEVER auto-delete weights or resumable .incomplete!
+        AddReadOnlyRadarDir(@"Hugging Face 模型缓存 (.cache\huggingface)", "本地模型雷达",
+            Path.Combine(UserHome, @".cache\huggingface"),
+            "只读盘点：含模型权重、断点续传 .incomplete 与锁文件，严禁自动清理；可点「空间雷达」查看单个模型占用");
+        AddReadOnlyRadarDir(@"ModelScope 模型缓存 (.cache\modelscope)", "本地模型雷达",
+            Path.Combine(UserHome, @".cache\modelscope"),
+            "只读盘点：本地模型权重与下载暂存，严禁自动删除");
+        AddReadOnlyRadarDir(@"Ollama 本地模型库 (.ollama\models)", "本地模型雷达",
+            Path.Combine(UserHome, @".ollama\models"),
+            "只读盘点：如需移除旧模型请使用官方命令 ollama rm <model>");
+        AddReadOnlyRadarDir(@"LM Studio 本地模型 (.cache\lm-studio)", "本地模型雷达",
+            Path.Combine(UserHome, @".cache\lm-studio"),
+            "只读盘点：本地模型权重库，请使用 LM Studio 内置管理卸载");
+
+        report.Candidates = list
+            .OrderBy(c => c.Tier)
+            .ThenByDescending(c => c.IsRecommended)
+            .ThenByDescending(c => c.SizeBytes)
+            .ToList();
+        return report;
+    }
+
+    private static void AddOnlineSweepCandidate(
+        ZoneScanReport report, ZoneId zone, string title, string category,
+        string path, int minAgeDays, bool pruneEmpty, string reason, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
         if (!Directory.Exists(path)) return;
-        var sw = SafetyGuard.SweepFiles(path, minAgeDays, doApply: false, pruneEmptySubdirs: false);
+        var sw = SafetyGuard.SweepFiles(path, minAgeDays, doApply: false, pruneEmptySubdirs: false, ct);
+        report.AccessDeniedCount += sw.AccessDeniedCount;
         if (sw.EligibleBytes <= 0 && sw.EligibleFiles <= 0) return;
 
         bool wl = SettingsStore.IsWhitelisted(path);
         string extra = $"（跳过近期 {sw.SkippedRecent} / 联接 {sw.SkippedJunctions}，清理时自动跳过占用文件）";
-        list.Add(new CleanCandidate
+        report.Candidates.Add(new CleanCandidate
         {
             Zone = zone,
             Tier = wl ? CleanTier.ProtectedSkipped : CleanTier.SafeOnline,
@@ -749,14 +1051,16 @@ public static class ZoneScanner
     }
 
     private static void AddOfflineSingleDir(
-        List<CleanCandidate> list, ZoneId zone, bool appRunning,
-        string title, string path, int minAgeDays, string reason)
+        ZoneScanReport report, ZoneId zone, bool appRunning,
+        string title, string path, int minAgeDays, string reason, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         if (!Directory.Exists(path)) return;
-        var sw = SafetyGuard.SweepFiles(path, minAgeDays, doApply: false, pruneEmptySubdirs: false);
+        var sw = SafetyGuard.SweepFiles(path, minAgeDays, doApply: false, pruneEmptySubdirs: false, ct);
+        report.AccessDeniedCount += sw.AccessDeniedCount;
         if (sw.EligibleBytes <= 0 && sw.EligibleFiles <= 0) return;
 
-        list.Add(new CleanCandidate
+        report.Candidates.Add(new CleanCandidate
         {
             Zone = zone,
             Tier = CleanTier.OfflineCache,
@@ -776,18 +1080,20 @@ public static class ZoneScanner
     }
 
     private static void AddOfflineCacheDirs(
-        List<CleanCandidate> list, ZoneId zone, bool appRunning,
-        string baseDir, string[] subNames, string groupTitle)
+        ZoneScanReport report, ZoneId zone, bool appRunning,
+        string baseDir, string[] subNames, string groupTitle, CancellationToken ct)
     {
         if (!Directory.Exists(baseDir)) return;
         foreach (var sub in subNames)
         {
+            ct.ThrowIfCancellationRequested();
             string full = Path.Combine(baseDir, sub);
             if (!Directory.Exists(full)) continue;
-            var sw = SafetyGuard.SweepFiles(full, minAgeDays: 0, doApply: false, pruneEmptySubdirs: false);
+            var sw = SafetyGuard.SweepFiles(full, minAgeDays: 0, doApply: false, pruneEmptySubdirs: false, ct);
+            report.AccessDeniedCount += sw.AccessDeniedCount;
             if (sw.EligibleBytes < 1024 * 1024) continue;
 
-            list.Add(new CleanCandidate
+            report.Candidates.Add(new CleanCandidate
             {
                 Zone = zone,
                 Tier = CleanTier.OfflineCache,

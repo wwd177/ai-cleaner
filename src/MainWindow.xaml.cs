@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -41,6 +42,9 @@ public partial class MainWindow : Window
     private static readonly SolidColorBrush BrInspDefaultBg = FreezeBrush(230, 243, 255);
     private static readonly SolidColorBrush BrInspDefaultBorder = FreezeBrush(167, 208, 252);
     private static readonly SolidColorBrush BrInspDefaultInk = FreezeBrush(27, 91, 184);
+    private static readonly SolidColorBrush BrReadOnlyBg = FreezeBrush(230, 247, 247);
+    private static readonly SolidColorBrush BrReadOnlyBorder = FreezeBrush(153, 224, 220);
+    private static readonly SolidColorBrush BrReadOnlyInk = FreezeBrush(15, 118, 110);
     private static readonly ConcurrentDictionary<string, Brush> HexBrushCache = new(StringComparer.OrdinalIgnoreCase);
 
     private static Brush GetFrozenHexBrush(string hex, Brush fallback) =>
@@ -63,6 +67,10 @@ public partial class MainWindow : Window
     private readonly Dictionary<ZoneId, ZoneScanReport> _reports = new();
     private Dictionary<ZoneId, ZoneProcessInfo> _procCache = new();
     private readonly HashSet<ZoneId> _scanningZones = new();
+    private readonly Dictionary<ZoneId, CancellationTokenSource> _zoneScanCts = new();
+    private readonly Dictionary<ZoneId, ZoneSidebarItem> _sidebarByZone = new();
+    private readonly ObservableCollection<ZoneSidebarItem> _activeSidebarZones = new();
+    private readonly ObservableCollection<ZoneSidebarItem> _inactiveSidebarZones = new();
     private bool _isCleaning;
     private bool _scheduleInstalled;
     private bool _scheduleLoaded;
@@ -76,9 +84,10 @@ public partial class MainWindow : Window
         _qaCaptureDir = qaCaptureDir;
         InitializeComponent();
         GlassDialogs.ApplyIceBlueTitleBar(this);
+        InitializeDynamicSidebar();
 
         // Live auto-unlock: when user exits ChatGPT/Antigravity/DSH and switches back,
-        // asynchronously re-check processes (7ms, 0ms UI lag) and auto-unlock Blue offline caches!
+        // asynchronously re-check processes (~7ms, 0ms UI lag) and auto-unlock Blue offline caches!
         Activated += async (_, _) =>
         {
             if (!IsLoaded || _isCleaning || !string.IsNullOrWhiteSpace(_qaCaptureDir)) return;
@@ -96,15 +105,14 @@ public partial class MainWindow : Window
             UpdateZoneChrome();
             _ = RefreshRecycleBinAsync();
 
-            // Single-pass process check first (~7ms), then pass the snapshot to all 3 parallel zone scans
-            // (eliminates 3 redundant OS process scans at startup!).
+            // Single-pass process check first (~7ms), then pass the snapshot to all parallel zone scans!
             var procs = await RefreshAllProcessBadgesAsync(syncOfflineLocks: false);
             var schedTask = RefreshScheduleStatusAsync();
-            var scanAg = ScanSingleZoneAsync(ZoneId.Antigravity, silent: true, preloadedProc: procs[ZoneId.Antigravity]);
-            var scanDsh = ScanSingleZoneAsync(ZoneId.DeepSeekHarness, silent: true, preloadedProc: procs[ZoneId.DeepSeekHarness]);
-            var scanGpt = ScanSingleZoneAsync(ZoneId.GptCodex, silent: true, preloadedProc: procs[ZoneId.GptCodex]);
+            var scanTasks = ZoneCatalog.All
+                .Select(def => ScanSingleZoneAsync(def.Id, silent: true, preloadedProc: procs[def.Id]))
+                .ToList();
 
-            await Task.WhenAll(schedTask, scanAg, scanDsh, scanGpt);
+            await Task.WhenAll(scanTasks.Append(schedTask));
 
             if (!string.IsNullOrWhiteSpace(_qaCaptureDir))
             {
@@ -112,6 +120,69 @@ public partial class MainWindow : Window
                 Close();
             }
         };
+    }
+
+    private void InitializeDynamicSidebar()
+    {
+        _activeSidebarZones.Clear();
+        _inactiveSidebarZones.Clear();
+        _sidebarByZone.Clear();
+
+        foreach (var def in ZoneCatalog.All)
+        {
+            bool detected = def.DetectInstalled();
+            var item = new ZoneSidebarItem
+            {
+                Definition = def,
+                IsDetected = detected,
+                IsSelected = def.Id == _currentZone,
+                ProcText = def.IsReadOnlyZone ? "只读诊断模式" : "检测进程中...",
+                SummaryText = detected ? "准备扫描..." : "未检测到安装目录"
+            };
+            _sidebarByZone[def.Id] = item;
+            if (detected) _activeSidebarZones.Add(item);
+            else _inactiveSidebarZones.Add(item);
+        }
+
+        if (_activeSidebarZones.Count == 0 && _inactiveSidebarZones.Count > 0)
+        {
+            // Ensure at least the first zone is visible at top on a completely clean host
+            var first = _inactiveSidebarZones[0];
+            _inactiveSidebarZones.RemoveAt(0);
+            _activeSidebarZones.Add(first);
+        }
+        if (_activeSidebarZones.Count > 0 && !_activeSidebarZones.Any(x => x.Zone == _currentZone))
+        {
+            _currentZone = _activeSidebarZones[0].Zone;
+            foreach (var it in _sidebarByZone.Values) it.IsSelected = it.Zone == _currentZone;
+        }
+
+        ListActiveZones.ItemsSource = _activeSidebarZones;
+        ListInactiveZones.ItemsSource = _inactiveSidebarZones;
+        ExpUninstalledZones.Visibility = _inactiveSidebarZones.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        ExpUninstalledZones.Header = $"未检测到 / 其他专区 ({_inactiveSidebarZones.Count})";
+    }
+
+    private void RefreshSidebarDetectionGroups()
+    {
+        _activeSidebarZones.Clear();
+        _inactiveSidebarZones.Clear();
+        foreach (var def in ZoneCatalog.All)
+        {
+            if (!_sidebarByZone.TryGetValue(def.Id, out var item)) continue;
+            bool detected = def.DetectInstalled();
+            item.IsDetected = detected;
+            if (detected) _activeSidebarZones.Add(item);
+            else _inactiveSidebarZones.Add(item);
+        }
+        if (_activeSidebarZones.Count == 0 && _inactiveSidebarZones.Count > 0)
+        {
+            var first = _inactiveSidebarZones[0];
+            _inactiveSidebarZones.RemoveAt(0);
+            _activeSidebarZones.Add(first);
+        }
+        ExpUninstalledZones.Visibility = _inactiveSidebarZones.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        ExpUninstalledZones.Header = $"未检测到 / 其他专区 ({_inactiveSidebarZones.Count})";
     }
 
     protected override void OnClosing(CancelEventArgs e)
@@ -124,6 +195,12 @@ public partial class MainWindow : Window
                 "清理进行中", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
+        foreach (var cts in _zoneScanCts.Values)
+        {
+            // Cancel only; each running ScanSingleZoneAsync owns and disposes its own CTS in finally.
+            try { cts.Cancel(); } catch { }
+        }
+        _zoneScanCts.Clear();
         base.OnClosing(e);
     }
 
@@ -156,32 +233,32 @@ public partial class MainWindow : Window
         swProc.Stop();
         bench.AppendLine($"GetAllZoneProcesses_ms={swProc.ElapsedMilliseconds}");
 
-        foreach (var z in new[] { ZoneId.Antigravity, ZoneId.GptCodex, ZoneId.DeepSeekHarness })
+        foreach (var def in ZoneCatalog.All)
         {
             var swScan = Stopwatch.StartNew();
-            _ = await Task.Run(() => ZoneScanner.ScanZone(z));
+            _ = await Task.Run(() => ZoneScanner.ScanZone(def.Id));
             swScan.Stop();
-            bench.AppendLine($"Scan_{z}_ms={swScan.ElapsedMilliseconds}");
+            bench.AppendLine($"Scan_{def.Slug}_ms={swScan.ElapsedMilliseconds}");
         }
 
-        // Measure pure UI switching latency across all 3 zones!
-        foreach (var z in new[] { ZoneId.GptCodex, ZoneId.DeepSeekHarness, ZoneId.Antigravity, ZoneId.GptCodex })
+        // Measure pure UI switching latency across all 5 zones!
+        foreach (var z in new[] { ZoneId.GptCodex, ZoneId.DeepSeekHarness, ZoneId.ClaudeCode, ZoneId.AiToolchains, ZoneId.Antigravity, ZoneId.GptCodex })
         {
             var swSwitch = Stopwatch.StartNew();
             SwitchToZoneInstant(z);
             UpdateLayout();
             swSwitch.Stop();
-            bench.AppendLine($"UiSwitchTo_{z}_ms={swSwitch.ElapsedMilliseconds}");
+            bench.AppendLine($"UiSwitchTo_{ZoneCatalog.Get(z).Slug}_ms={swSwitch.ElapsedMilliseconds}");
         }
 
-        foreach (var z in new[] { ZoneId.Antigravity, ZoneId.GptCodex, ZoneId.DeepSeekHarness })
+        foreach (var def in ZoneCatalog.All)
         {
-            SwitchToZoneInstant(z);
+            SwitchToZoneInstant(def.Id);
             if (GridCandidates.Items.Count > 0)
                 GridCandidates.SelectedIndex = 0;
             UpdateLayout();
             await Task.Delay(120);
-            SaveVisualPng(Path.Combine(outDir, $"glass-{z.ToString().ToLowerInvariant()}.png"));
+            SaveVisualPng(Path.Combine(outDir, $"glass-{def.Slug}.png"));
         }
 
         File.WriteAllText(Path.Combine(outDir, "bench.txt"), bench.ToString(), new UTF8Encoding(false));
@@ -234,8 +311,8 @@ public partial class MainWindow : Window
         }
         BtnQuickCleanAllSafe.IsEnabled = !anyBusy && totalItems > 0;
         TxtQuickCleanAllSafe.Text = totalItems > 0
-            ? $"一键清三区绿区 ({CleanCandidate.FormatBytes(totalSafe)})"
-            : "三区绿区已洁净";
+            ? $"一键清全区绿区 ({CleanCandidate.FormatBytes(totalSafe)})"
+            : "全区绿区已洁净";
     }
 
     private async Task RefreshRecycleBinAsync()
@@ -331,9 +408,8 @@ public partial class MainWindow : Window
             return _procCache.Count > 0 ? _procCache : all;
 
         _procCache = all;
-        ApplySideProcBadge(all[ZoneId.Antigravity], DotAgProc, TxtAgSideProc);
-        ApplySideProcBadge(all[ZoneId.GptCodex], DotGptProc, TxtGptSideProc);
-        ApplySideProcBadge(all[ZoneId.DeepSeekHarness], DotDshProc, TxtDshSideProc);
+        foreach (var (zone, info) in all)
+            UpdateSingleSideProc(zone, info);
 
         if (syncOfflineLocks)
         {
@@ -368,60 +444,29 @@ public partial class MainWindow : Window
         return all;
     }
 
-    private static void ApplySideProcBadge(ZoneProcessInfo p, Border dot, TextBlock label)
-    {
-        if (p.IsRunning)
-        {
-            dot.Background = BrEmerald;
-            label.Text = $"运行中 ({p.RunningPids.Count} 进程) · 离线项已锁";
-        }
-        else
-        {
-            dot.Background = BrSlateDot;
-            label.Text = "已退出 · 可清离线缓存";
-        }
-    }
-
     private void UpdateZoneChrome()
     {
-        var normalBorder = (Brush)FindResource("BorderGlass");
-        var normalBg = (Brush)FindResource("GlassCardBrush");
-        var activeBg = (Brush)FindResource("ActiveZoneBrush");
-        var normalLift = (Brush)FindResource("GlassLiftShadow");
-        var activeLift = (Brush)FindResource("GlassLiftShadowActive");
+        var def = ZoneCatalog.Get(_currentZone);
+        foreach (var it in _sidebarByZone.Values)
+            it.IsSelected = it.Zone == _currentZone;
 
-        void StyleCard(Border card, Border shadowBorder, Border accentBar, bool active, string accentRes)
-        {
-            card.Background = active ? activeBg : normalBg;
-            card.BorderBrush = active ? (Brush)FindResource(accentRes) : normalBorder;
-            card.BorderThickness = active ? new Thickness(1.6) : new Thickness(1);
-            shadowBorder.Background = active ? activeLift : normalLift;
-            accentBar.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
-        }
+        if (_inactiveSidebarZones.Any(x => x.Zone == _currentZone))
+            ExpUninstalledZones.IsExpanded = true;
 
-        StyleCard(CardAntigravity, ShadowAntigravity, BarAgAccent, _currentZone == ZoneId.Antigravity, "AccentBlue");
-        StyleCard(CardGpt, ShadowGpt, BarGptAccent, _currentZone == ZoneId.GptCodex, "AccentCyan");
-        StyleCard(CardDsh, ShadowDsh, BarDshAccent, _currentZone == ZoneId.DeepSeekHarness, "AccentIndigo");
+        BringSelectedZoneCardIntoView(_currentZone);
 
-        BarGptSchedule.Visibility = _currentZone == ZoneId.GptCodex ? Visibility.Visible : Visibility.Collapsed;
-
-        switch (_currentZone)
-        {
-            case ZoneId.Antigravity:
-                TxtZoneTitle.Text = "Antigravity 专区";
-                TxtZoneSubtitle.Text = "覆盖 Antigravity 更新器安装包残留、运行缓存、崩溃/客户端日志、历史会话产物与离线浏览器缓存；硬保护 conversations 主对话库与登录态。";
-                break;
-            case ZoneId.GptCodex:
-                TxtZoneTitle.Text = "GPT / Codex 专区";
-                TxtZoneSubtitle.Text = @"面向 ChatGPT 桌面端与 Codex 工作区：覆盖 temp、包缓存、_tmp/__pycache__、历史打包暂存（回收站）与离线浏览器缓存；硬保护 .codex 核心库、runtimes 及全部联接。";
-                break;
-            case ZoneId.DeepSeekHarness:
-                TxtZoneTitle.Text = "DeepSeek Harness 专区";
-                TxtZoneSubtitle.Text = "覆盖 DSH 更新器残留、.dsh/cache、历史配置备份、超 14 天旧附件（回收站）与离线桌面缓存；硬保护 .dsh/profiles、skills 联接、sessions 与账号凭据。";
-                break;
-        }
-
+        BarGptSchedule.Visibility = def.HasScheduledTaskStrip ? Visibility.Visible : Visibility.Collapsed;
+        TxtZoneTitle.Text = def.DisplayName;
+        TxtZoneSubtitle.Text = def.Subtitle;
         ApplyCurrentReportToView();
+    }
+
+    private void BringSelectedZoneCardIntoView(ZoneId zone)
+    {
+        if (!_sidebarByZone.TryGetValue(zone, out var item)) return;
+        var host = _activeSidebarZones.Contains(item) ? ListActiveZones : ListInactiveZones;
+        if (host.ItemContainerGenerator.ContainerFromItem(item) is FrameworkElement container)
+            container.BringIntoView();
     }
 
     private void SwitchToZoneInstant(ZoneId target)
@@ -443,7 +488,13 @@ public partial class MainWindow : Window
         }
         else if (_reports.TryGetValue(target, out var ready))
         {
-            UpdateBusyIndicators($"{GetZoneName(target)} 已就绪（在线安全 {CleanCandidate.FormatBytes(ready.SafeOnlineBytes)}，回收站候选 {CleanCandidate.FormatBytes(ready.RecycleCandidateBytes)}，离线缓存 {CleanCandidate.FormatBytes(ready.OfflineCacheBytes)}）。");
+            var def = ZoneCatalog.Get(target);
+            string msg = def.IsReadOnlyZone
+                ? $"{def.DisplayName} 已就绪（严格只读诊断：共盘点 {CleanCandidate.FormatBytes(ready.DiagnosticBytes)}，0 删除候选，耗时 {ready.ElapsedMs} ms）。"
+                : $"{def.DisplayName} 已就绪（绿区 {CleanCandidate.FormatBytes(ready.SafeOnlineBytes)}，黄区 {CleanCandidate.FormatBytes(ready.RecycleCandidateBytes)}，蓝区 {CleanCandidate.FormatBytes(ready.OfflineCacheBytes)}，耗时 {ready.ElapsedMs} ms）。";
+            if (ready.Status == ScanStatus.Partial)
+                msg += $" [部分目录权限受限: {ready.AccessDeniedCount}]";
+            UpdateBusyIndicators(msg);
         }
         else
         {
@@ -453,14 +504,24 @@ public partial class MainWindow : Window
 
     private async Task ScanSingleZoneAsync(ZoneId zone, bool silent = false, ZoneProcessInfo? preloadedProc = null)
     {
-        if (!_scanningZones.Add(zone)) return;
+        // Cancel any previous in-flight scan without disposing its CTS (the previous owner disposes its own CTS in finally!)
+        if (_zoneScanCts.TryGetValue(zone, out var prevCts))
+        {
+            try { prevCts.Cancel(); } catch { }
+        }
+        var cts = new CancellationTokenSource();
+        _zoneScanCts[zone] = cts;
+        var ct = cts.Token;
+
+        bool IsCurrentOwner() => _zoneScanCts.TryGetValue(zone, out var cur) && ReferenceEquals(cur, cts);
+
+        _scanningZones.Add(zone);
         string zoneLabel = GetZoneName(zone);
         if (!silent || _currentZone == zone)
             UpdateBusyIndicators($"正在扫描 {zoneLabel}（只读体检，不阻塞切换）...");
         else
             UpdateBusyIndicators();
 
-        // Capture currently checked items so still-valid selections survive a rescan!
         HashSet<string>? prevSelectedKeys = null;
         if (_reports.TryGetValue(zone, out var oldRep))
         {
@@ -468,13 +529,15 @@ public partial class MainWindow : Window
             if (keys.Count > 0) prevSelectedKeys = new HashSet<string>(keys, StringComparer.OrdinalIgnoreCase);
         }
 
+        string? finalStatusMsg = null;
         try
         {
             long seqAtStart = Volatile.Read(ref _procRefreshSeq);
-            var report = await Task.Run(() => ZoneScanner.ScanZone(zone, preloadedProc));
+            var report = await Task.Run(() => ZoneScanner.ScanZone(zone, preloadedProc, ct), ct);
+            if (!IsCurrentOwner() || ct.IsCancellationRequested || report.Status == ScanStatus.Cancelled)
+                return;
 
-            // Reconcile commit order (Astra P1 race fix!): if a fresher process refresh completed
-            // while this scan was running, NEVER let stale scan status overwrite live process locks!
+            // Reconcile commit order: NEVER let stale scan status overwrite fresher live process locks!
             if (Volatile.Read(ref _procRefreshSeq) > seqAtStart && _procCache.TryGetValue(zone, out var latestProc))
             {
                 report.ProcessInfo = latestProc;
@@ -486,7 +549,6 @@ public partial class MainWindow : Window
                 _procCache[zone] = report.ProcessInfo;
             }
 
-            // Reconcile user selections that remain eligible & not newly whitelisted/locked
             if (prevSelectedKeys != null)
             {
                 foreach (var c in report.Candidates)
@@ -504,49 +566,96 @@ public partial class MainWindow : Window
             if (_currentZone == zone)
                 ApplyCurrentReportToView();
 
-            _scanningZones.Remove(zone);
-            string doneMsg = _scanningZones.Count == 0
-                ? $"全部专区已就绪（{zoneLabel}：在线安全 {CleanCandidate.FormatBytes(report.SafeOnlineBytes)}，回收站候选 {CleanCandidate.FormatBytes(report.RecycleCandidateBytes)}）。"
+            string statusSuffix = report.Status == ScanStatus.Partial ? $"（权限受限 {report.AccessDeniedCount} 处）" : "";
+            finalStatusMsg = _scanningZones.Count <= 1
+                ? $"全部专区已就绪（{zoneLabel}：耗时 {report.ElapsedMs} ms{statusSuffix}）。"
                 : $"{zoneLabel} 扫描完成，其余专区仍在后台扫描中...";
-            UpdateBusyIndicators(doneMsg);
+        }
+        catch (OperationCanceledException)
+        {
+            // Replaced by a newer scan or window closing; finally cleans up if still current owner
         }
         catch (Exception ex)
         {
-            _scanningZones.Remove(zone);
-            UpdateBusyIndicators($"{zoneLabel} 扫描出错：{ex.Message}");
+            if (IsCurrentOwner())
+                finalStatusMsg = $"{zoneLabel} 扫描出错：{ex.Message}";
+        }
+        finally
+        {
+            if (IsCurrentOwner())
+            {
+                _zoneScanCts.Remove(zone);
+                _scanningZones.Remove(zone);
+                UpdateBusyIndicators(finalStatusMsg);
+            }
+            try { cts.Dispose(); } catch { }
         }
     }
 
     private void UpdateSingleSideProc(ZoneId zone, ZoneProcessInfo info)
     {
-        switch (zone)
+        if (!_sidebarByZone.TryGetValue(zone, out var item)) return;
+        item.IsRunning = info.IsRunning;
+        if (item.IsReadOnlyZone)
         {
-            case ZoneId.Antigravity: ApplySideProcBadge(info, DotAgProc, TxtAgSideProc); break;
-            case ZoneId.GptCodex: ApplySideProcBadge(info, DotGptProc, TxtGptSideProc); break;
-            case ZoneId.DeepSeekHarness: ApplySideProcBadge(info, DotDshProc, TxtDshSideProc); break;
+            item.ProcText = info.IsRunning
+                ? $"运行中 ({info.RunningPids.Count} 进程) · 只读诊断"
+                : "已退出 · 只读安全诊断";
+        }
+        else if (info.IsRunning)
+        {
+            item.ProcText = $"运行中 ({info.RunningPids.Count} 进程) · 离线项已锁";
+        }
+        else
+        {
+            item.ProcText = "已退出 · 可清离线缓存";
         }
     }
 
     private void UpdateSidebarZoneSummary(ZoneScanReport report)
     {
-        long totalCleanable = report.SafeOnlineBytes + report.RecycleCandidateBytes + (report.ProcessInfo.IsRunning ? 0 : report.OfflineCacheBytes);
-        string text = $"可清理 {CleanCandidate.FormatBytes(totalCleanable)}（含回收站项）";
-        switch (report.Zone)
+        if (!_sidebarByZone.TryGetValue(report.Zone, out var item)) return;
+        item.IsDetected = report.IsDetected;
+        if (report.Status == ScanStatus.Error)
         {
-            case ZoneId.Antigravity: TxtAgSideSize.Text = text; break;
-            case ZoneId.GptCodex: TxtGptSideSize.Text = text; break;
-            case ZoneId.DeepSeekHarness: TxtDshSideSize.Text = text; break;
+            item.SummaryText = "扫描受限";
+            return;
         }
+        if (item.IsReadOnlyZone)
+        {
+            item.SummaryText = report.DiagnosticBytes > 0
+                ? $"只读诊断 · 占用 {CleanCandidate.FormatBytes(report.DiagnosticBytes)}"
+                : (report.IsDetected ? "只读诊断 · 0 项大目录" : "未检测到安装目录");
+            return;
+        }
+        long totalCleanable = report.SafeOnlineBytes + report.RecycleCandidateBytes + (report.ProcessInfo.IsRunning ? 0 : report.OfflineCacheBytes);
+        if (totalCleanable > 0)
+            item.SummaryText = $"可清理 {CleanCandidate.FormatBytes(totalCleanable)}（含回收站项）";
+        else if (report.DiagnosticBytes > 0)
+            item.SummaryText = $"只读雷达 {CleanCandidate.FormatBytes(report.DiagnosticBytes)} · 可清 0 B";
+        else
+            item.SummaryText = report.IsDetected ? "已洁净（可清理 0 B）" : "未检测到安装目录";
     }
 
     private void ApplyHeaderProcessBadge()
     {
-        // Strictly O(1) memory lookup — NEVER runs Process.GetProcesses() on the UI thread!
+        var def = ZoneCatalog.Get(_currentZone);
         ZoneProcessInfo? proc = null;
         if (_reports.TryGetValue(_currentZone, out var rep))
             proc = rep.ProcessInfo;
         else if (_procCache.TryGetValue(_currentZone, out var cached))
             proc = cached;
+
+        if (def.IsReadOnlyZone)
+        {
+            BadgeProcStatus.Background = BrReadOnlyBg;
+            BadgeProcStatus.BorderBrush = BrReadOnlyBorder;
+            TxtProcBadge.Foreground = BrReadOnlyInk;
+            TxtProcBadge.Text = proc is { IsRunning: true }
+                ? $"运行中 ({proc.RunningPids.Count} 进程) · 只读诊断模式（0 删除）"
+                : "只读诊断模式（绝不执行删除）";
+            return;
+        }
 
         if (proc == null)
         {
@@ -593,21 +702,38 @@ public partial class MainWindow : Window
             return;
         }
 
-        int safeCnt = rep.Candidates.Count(c => c.Tier == CleanTier.SafeOnline && c.CanSelect);
-        int recCnt = rep.Candidates.Count(c => c.Tier == CleanTier.RecycleCandidate && c.CanSelect);
-        int offCnt = rep.Candidates.Count(c => c.Tier == CleanTier.OfflineCache);
-        int recoCnt = rep.Candidates.Count(c => c.IsRecommended && c.CanSelect);
+        var def = ZoneCatalog.Get(_currentZone);
+        int safeCnt = rep.Candidates.Count(c => c.Tier == CleanTier.SafeOnline && c.CanSelect && !c.IsReadOnlyDiagnostic);
+        int recCnt = rep.Candidates.Count(c => c.Tier == CleanTier.RecycleCandidate && c.CanSelect && !c.IsReadOnlyDiagnostic);
+        int offCnt = rep.Candidates.Count(c => c.Tier == CleanTier.OfflineCache && !c.IsReadOnlyDiagnostic);
+        int diagCnt = rep.Candidates.Count(c => c.IsReadOnlyDiagnostic);
+        int recoCnt = rep.Candidates.Count(c => c.IsRecommended && c.CanSelect && !c.IsReadOnlyDiagnostic);
 
         TxtKpiSafe.Text = CleanCandidate.FormatBytes(rep.SafeOnlineBytes);
-        TxtKpiSafeSub.Text = $"{safeCnt} 项 · 应用开着即可清";
+        TxtKpiSafeSub.Text = def.IsReadOnlyZone
+            ? "只读诊断专区 · 0 删除候选"
+            : $"{safeCnt} 项 · 应用开着即可清";
 
         TxtKpiRecycle.Text = CleanCandidate.FormatBytes(rep.RecycleCandidateBytes);
-        TxtKpiRecycleSub.Text = $"{recCnt} 项 · 移入回收站可恢复";
+        TxtKpiRecycleSub.Text = def.IsReadOnlyZone
+            ? "受保护 · 绝不自动回收"
+            : $"{recCnt} 项 · 移入回收站可恢复";
 
-        TxtKpiOffline.Text = CleanCandidate.FormatBytes(rep.OfflineCacheBytes);
-        TxtKpiOfflineSub.Text = rep.ProcessInfo.IsRunning
-            ? $"{offCnt} 项 · 应用运行中已自动加锁"
-            : $"{offCnt} 项 · 应用已退出，可勾选清理";
+        bool showDiagInKpi3 = def.IsReadOnlyZone || (offCnt == 0 && diagCnt > 0);
+        if (showDiagInKpi3)
+        {
+            TxtKpiOfflineLabel.Text = "只读雷达 · 空间诊断（绝不自动删）";
+            TxtKpiOffline.Text = CleanCandidate.FormatBytes(rep.DiagnosticBytes);
+            TxtKpiOfflineSub.Text = $"{diagCnt} 项 · 右键/点「空间雷达」下钻查看";
+        }
+        else
+        {
+            TxtKpiOfflineLabel.Text = "蓝区 · 离线浏览器缓存（退出后可清）";
+            TxtKpiOffline.Text = CleanCandidate.FormatBytes(rep.OfflineCacheBytes);
+            TxtKpiOfflineSub.Text = rep.ProcessInfo.IsRunning
+                ? $"{offCnt} 项 · 应用运行中已自动加锁"
+                : $"{offCnt} 项 · 应用已退出，可勾选清理";
+        }
 
         BtnSelectRecommended.Content = recoCnt > 0
             ? $"勾选高置信推荐 ({recoCnt})"
@@ -636,10 +762,12 @@ public partial class MainWindow : Window
 
         if (total <= 0)
         {
-            ColBarSafe.Width = new GridLength(1, GridUnitType.Star);
+            ColBarSafe.Width = new GridLength(rep.DiagnosticBytes > 0 ? 0 : 1, GridUnitType.Star);
             ColBarRecycle.Width = new GridLength(0, GridUnitType.Star);
-            ColBarOffline.Width = new GridLength(0, GridUnitType.Star);
-            TxtBreakdownSummary.Text = "当前专区已非常洁净（0 B 待清理）";
+            ColBarOffline.Width = new GridLength(rep.DiagnosticBytes > 0 ? 1 : 0, GridUnitType.Star);
+            TxtBreakdownSummary.Text = rep.DiagnosticBytes > 0
+                ? $"只读雷达总计 {CleanCandidate.FormatBytes(rep.DiagnosticBytes)}（严禁自动删除，不计入可释放量）"
+                : "当前专区已非常洁净（0 B 待清理）";
             return;
         }
 
@@ -648,7 +776,8 @@ public partial class MainWindow : Window
         ColBarOffline.Width = new GridLength(o > 0 ? Math.Max(0.03, (double)o / total) : 0, GridUnitType.Star);
 
         long nowCleanable = s + r + (rep.ProcessInfo.IsRunning ? 0 : o);
-        TxtBreakdownSummary.Text = $"可立即释放 {CleanCandidate.FormatBytes(nowCleanable)} / 总发现 {CleanCandidate.FormatBytes(total)}（绿 {CleanCandidate.FormatBytes(s)} · 黄 {CleanCandidate.FormatBytes(r)} · 蓝 {CleanCandidate.FormatBytes(o)}）";
+        string diagNote = rep.DiagnosticBytes > 0 ? $" · 只读雷达 {CleanCandidate.FormatBytes(rep.DiagnosticBytes)}" : "";
+        TxtBreakdownSummary.Text = $"可立即释放 {CleanCandidate.FormatBytes(nowCleanable)} / 总发现 {CleanCandidate.FormatBytes(total)}（绿 {CleanCandidate.FormatBytes(s)} · 黄 {CleanCandidate.FormatBytes(r)} · 蓝 {CleanCandidate.FormatBytes(o)}{diagNote}）";
     }
 
     private void UpdateInspector(CleanCandidate? item)
@@ -745,33 +874,20 @@ public partial class MainWindow : Window
         BtnToggleSchedule.Content = installed ? "停用定时任务" : "启用每周定时任务";
     }
 
-    // === Instant Non-Blocking Zone Switching ===
-    private void ZoneCard_Antigravity_Click(object sender, MouseButtonEventArgs e)
+    // === Instant Non-Blocking Dynamic Zone Switching ===
+    private void ZoneCard_Dynamic_Click(object sender, MouseButtonEventArgs e)
     {
-        SwitchToZoneInstant(ZoneId.Antigravity);
-        if (!_reports.ContainsKey(ZoneId.Antigravity) && !_scanningZones.Contains(ZoneId.Antigravity))
-            _ = ScanSingleZoneAsync(ZoneId.Antigravity);
-    }
-
-    private void ZoneCard_Gpt_Click(object sender, MouseButtonEventArgs e)
-    {
-        SwitchToZoneInstant(ZoneId.GptCodex);
-        if (!_scheduleLoaded)
+        if (sender is not FrameworkElement fe || fe.Tag is not ZoneId target) return;
+        SwitchToZoneInstant(target);
+        if (ZoneCatalog.Get(target).HasScheduledTaskStrip && !_scheduleLoaded)
             _ = RefreshScheduleStatusAsync();
-        if (!_reports.ContainsKey(ZoneId.GptCodex) && !_scanningZones.Contains(ZoneId.GptCodex))
-            _ = ScanSingleZoneAsync(ZoneId.GptCodex);
-    }
-
-    private void ZoneCard_Dsh_Click(object sender, MouseButtonEventArgs e)
-    {
-        SwitchToZoneInstant(ZoneId.DeepSeekHarness);
-        if (!_reports.ContainsKey(ZoneId.DeepSeekHarness) && !_scanningZones.Contains(ZoneId.DeepSeekHarness))
-            _ = ScanSingleZoneAsync(ZoneId.DeepSeekHarness);
+        if (!_reports.ContainsKey(target) && !_scanningZones.Contains(target))
+            _ = ScanSingleZoneAsync(target);
     }
 
     private async void BtnRescanZone_Click(object sender, RoutedEventArgs e)
     {
-        if (_currentZone == ZoneId.GptCodex)
+        if (ZoneCatalog.Get(_currentZone).HasScheduledTaskStrip)
             _ = RefreshScheduleStatusAsync();
         await ScanSingleZoneAsync(_currentZone);
     }
@@ -780,13 +896,10 @@ public partial class MainWindow : Window
     {
         if (_isCleaning || _scanningZones.Count > 0) return;
         var procs = await RefreshAllProcessBadgesAsync(syncOfflineLocks: false);
-        await Task.WhenAll(
-            ScanSingleZoneAsync(ZoneId.Antigravity, silent: true, preloadedProc: procs[ZoneId.Antigravity]),
-            ScanSingleZoneAsync(ZoneId.DeepSeekHarness, silent: true, preloadedProc: procs[ZoneId.DeepSeekHarness]),
-            ScanSingleZoneAsync(ZoneId.GptCodex, silent: true, preloadedProc: procs[ZoneId.GptCodex])
-        );
+        await Task.WhenAll(ZoneCatalog.All.Select(def =>
+            ScanSingleZoneAsync(def.Id, silent: true, preloadedProc: procs[def.Id])));
         ApplyCurrentReportToView();
-        UpdateBusyIndicators("三个专区并行扫描完成。可随时瞬间切换专区并勾选清理。");
+        UpdateBusyIndicators($"全部 {ZoneCatalog.All.Count} 个专区并行扫描完成。可随时瞬间切换专区并勾选清理。");
     }
 
     private void Filter_Changed(object sender, RoutedEventArgs e)
@@ -807,7 +920,19 @@ public partial class MainWindow : Window
 
     private void KpiSafe_Click(object sender, MouseButtonEventArgs e) => RbFilterSafe.IsChecked = true;
     private void KpiRecycle_Click(object sender, MouseButtonEventArgs e) => RbFilterRecycle.IsChecked = true;
-    private void KpiOffline_Click(object sender, MouseButtonEventArgs e) => RbFilterOffline.IsChecked = true;
+    private void KpiOffline_Click(object sender, MouseButtonEventArgs e)
+    {
+        var def = ZoneCatalog.Get(_currentZone);
+        bool diagMode = def.IsReadOnlyZone;
+        if (!diagMode && _reports.TryGetValue(_currentZone, out var rep))
+        {
+            int offCnt = rep.Candidates.Count(c => c.Tier == CleanTier.OfflineCache && !c.IsReadOnlyDiagnostic);
+            int diagCnt = rep.Candidates.Count(c => c.IsReadOnlyDiagnostic);
+            diagMode = offCnt == 0 && diagCnt > 0;
+        }
+        if (diagMode) RbFilterProtected.IsChecked = true;
+        else RbFilterOffline.IsChecked = true;
+    }
 
     private void ItemCheckbox_Changed(object sender, RoutedEventArgs e) => UpdateCleanButtonState();
 
@@ -893,16 +1018,9 @@ public partial class MainWindow : Window
         }
         else
         {
-            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var settings = SettingsStore.Load();
-            string? firstWs = settings.ExtraWorkspaceRoots.FirstOrDefault(Directory.Exists);
-            (targetPath, title) = _currentZone switch
-            {
-                ZoneId.Antigravity => (Path.Combine(home, @".gemini\antigravity"), "Antigravity 数据目录"),
-                ZoneId.GptCodex => (!string.IsNullOrEmpty(firstWs) ? firstWs : Path.Combine(home, ".codex"), "GPT / Codex 数据目录"),
-                ZoneId.DeepSeekHarness => (Path.Combine(home, ".dsh"), "DeepSeek Harness 目录"),
-                _ => (home, "目录透视")
-            };
+            var def = ZoneCatalog.Get(_currentZone);
+            targetPath = def.ResolveDefaultRadarPath(SettingsStore.Load());
+            title = def.DisplayName;
         }
 
         if (!Directory.Exists(targetPath) && !File.Exists(targetPath))
@@ -922,34 +1040,34 @@ public partial class MainWindow : Window
         if (_isCleaning || _scanningZones.Count > 0) return;
 
         var allSafe = new List<(ZoneId Zone, CleanCandidate Item)>();
-        foreach (var z in new[] { ZoneId.Antigravity, ZoneId.GptCodex, ZoneId.DeepSeekHarness })
+        foreach (var def in ZoneCatalog.All.Where(d => !d.IsReadOnlyZone))
         {
-            if (!_reports.TryGetValue(z, out var rep)) continue;
-            foreach (var c in rep.Candidates.Where(x => x.Tier == CleanTier.SafeOnline && x.CanSelect))
-                allSafe.Add((z, c));
+            if (!_reports.TryGetValue(def.Id, out var rep)) continue;
+            foreach (var c in rep.Candidates.Where(x => x.Tier == CleanTier.SafeOnline && x.CanSelect && !x.IsReadOnlyDiagnostic))
+                allSafe.Add((def.Id, c));
         }
 
         if (allSafe.Count == 0)
         {
-            MessageBox.Show(this, "当前三个专区的绿区在线安全缓存均为 0，无需清理。", "一键清理三区绿区", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(this, "当前所有专区的绿区在线安全缓存均为 0，无需清理。", "一键清理全区绿区", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
         long totalBytes = allSafe.Sum(x => x.Item.SizeBytes);
         var sb = new StringBuilder();
-        sb.AppendLine($"即将一键清理三个专区的全部【绿区 · 在线安全】项目（共 {allSafe.Count} 项，预计释放 {CleanCandidate.FormatBytes(totalBytes)}）：");
+        sb.AppendLine($"即将一键清理全部可写专区的【绿区 · 在线安全】项目（共 {allSafe.Count} 项，预计释放 {CleanCandidate.FormatBytes(totalBytes)}）：");
         sb.AppendLine();
         foreach (var (z, it) in allSafe.Take(14))
             sb.AppendLine($"• [{GetZoneName(z)}] [{it.SizeText}] {it.Title}");
         if (allSafe.Count > 14) sb.AppendLine($"... 等共 {allSafe.Count} 项");
         sb.AppendLine();
-        sb.AppendLine("安全承诺：仅清理绿区安全项（绝不碰黄区工作区、蓝区离线缓存与红区）；绝不关闭运行中的 AI 桌面端，安装包残留与临时目录均移入 Windows 回收站。");
+        sb.AppendLine("安全承诺：仅清理绿区安全项（绝不碰只读诊断区、黄区工作区、蓝区离线缓存与红区）；绝不关闭运行中的 AI 桌面端，安装包残留与临时目录均移入 Windows 回收站。");
 
-        if (MessageBox.Show(this, sb.ToString(), "确认一键清理三区绿区", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+        if (MessageBox.Show(this, sb.ToString(), "确认一键清理全区绿区", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
             return;
 
         _isCleaning = true;
-        UpdateBusyIndicators($"正在跨三区执行绿区安全清理（共 {allSafe.Count} 项）...");
+        UpdateBusyIndicators($"正在跨区执行绿区安全清理（共 {allSafe.Count} 项）...");
         try
         {
             long grandFreed = 0;
@@ -985,14 +1103,14 @@ public partial class MainWindow : Window
             RefreshDiskSpace();
             _ = RefreshRecycleBinAsync();
             _isCleaning = false;
-            UpdateBusyIndicators($"三区绿区清理完成：成功 {grandOk} 项，拦截/跳过 {grandBlocked} 项，共释放 {CleanCandidate.FormatBytes(grandFreed)}。");
+            UpdateBusyIndicators($"全区绿区清理完成：成功 {grandOk} 项，拦截/跳过 {grandBlocked} 项，共释放 {CleanCandidate.FormatBytes(grandFreed)}。");
 
             await Task.WhenAll(touchedZones.Select(z => ScanSingleZoneAsync(z, silent: true)));
             ApplyCurrentReportToView();
 
             MessageBox.Show(this,
-                $"三区绿区一键清理已完成！\n\n• 涉及专区：{touchedZones.Count} 个\n• 成功：{grandOk} 项\n• 拦截/跳过：{grandBlocked} 项\n• 共释放/移入回收站：{CleanCandidate.FormatBytes(grandFreed)}",
-                "三区绿区清理完成", MessageBoxButton.OK, MessageBoxImage.Information);
+                $"全区绿区一键清理已完成！\n\n• 涉及专区：{touchedZones.Count} 个\n• 成功：{grandOk} 项\n• 拦截/跳过：{grandBlocked} 项\n• 共释放/移入回收站：{CleanCandidate.FormatBytes(grandFreed)}",
+                "全区绿区清理完成", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
@@ -1158,8 +1276,9 @@ public partial class MainWindow : Window
             var md = new StringBuilder();
             md.AppendLine($"# {GetZoneName(_currentZone)} 清理体检报告");
             md.AppendLine($"- 生成时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            md.AppendLine($"- 扫描状态：{rep.Status}（耗时 {rep.ElapsedMs} ms，权限受限 {rep.AccessDeniedCount} 处）");
             md.AppendLine($"- 应用状态：{(rep.ProcessInfo.IsRunning ? $"运行中 ({rep.ProcessInfo.RunningPids.Count} 进程)" : "已退出")}");
-            md.AppendLine($"- 在线安全可清：{CleanCandidate.FormatBytes(rep.SafeOnlineBytes)} | 回收站候选：{CleanCandidate.FormatBytes(rep.RecycleCandidateBytes)} | 离线缓存：{CleanCandidate.FormatBytes(rep.OfflineCacheBytes)}");
+            md.AppendLine($"- 在线安全可清：{CleanCandidate.FormatBytes(rep.SafeOnlineBytes)} | 回收站候选：{CleanCandidate.FormatBytes(rep.RecycleCandidateBytes)} | 离线缓存：{CleanCandidate.FormatBytes(rep.OfflineCacheBytes)} | 只读雷达诊断：{CleanCandidate.FormatBytes(rep.DiagnosticBytes)}");
             md.AppendLine();
             md.AppendLine("| 分级 | 体积 | 文件数 | 最新修改 | 项目 | 路径 | 说明 |");
             md.AppendLine("|---|---:|---:|---|---|---|---|");
@@ -1198,7 +1317,11 @@ public partial class MainWindow : Window
         if (GlassDialogs.ShowSettingsAndWhitelistDialog(this))
         {
             RefreshPolicyButtonLabel();
-            await ScanSingleZoneAsync(_currentZone);
+            RefreshSidebarDetectionGroups();
+            var procs = await RefreshAllProcessBadgesAsync(syncOfflineLocks: false);
+            await Task.WhenAll(ZoneCatalog.All.Select(def =>
+                ScanSingleZoneAsync(def.Id, silent: true, preloadedProc: procs[def.Id])));
+            ApplyCurrentReportToView();
         }
     }
 
@@ -1216,24 +1339,22 @@ public partial class MainWindow : Window
     private void BtnShowRedlines_Click(object sender, RoutedEventArgs e)
     {
         string msg =
-            "【三专区硬编码红线保护（双层实时校验）】\n\n" +
+            "【五专区引擎级硬红线保护（双层实时校验）】\n\n" +
             "1. Antigravity 专区\n" +
             "   • 永不触碰：conversations 主对话库、.gemini/config、.env、登录态 Network/LocalStorage/IndexedDB/Service Worker Database、最近 72 小时会话产物。\n\n" +
             "2. GPT / Codex 专区（ChatGPT 桌面端）\n" +
-            "   • 永不触碰：%USERPROFILE%\\.codex 全目录与全部 SQLite 数据库（仅做 O(1) 只读体积诊断）、MSIX 包目录、runtimes、.codex 联接目标目录、一切 NTFS 联接点及含联接目录。\n" +
+            "   • 永不触碰：%USERPROFILE%\\.codex 全目录与全部 SQLite 数据库（仅 O(1) 只读体积诊断）、MSIX 包目录、runtimes、.codex 全部联接目标及含联接目录。\n" +
             "   • 离线浏览器缓存仅在 ChatGPT/codex 进程为 0 时开放（退出切回本窗口自动解锁），且只删内部文件、完整保留目录骨架。\n\n" +
             "3. DeepSeek Harness 专区\n" +
-            "   • 永不触碰：.dsh/profiles（含插件联接）、dsh-runtimes、skills 联接、sessions、.credentials.yaml、dsh-computer-use-win 与登录态。\n\n" +
-            "4. 通用铁律与白名单\n" +
-            "   • 执行清理前一刻再次校验实时进程、白名单与红线；绝不强杀任何 AI 桌面进程；所有工作区、安装包残留、备份与旧附件清理均移入 Windows 回收站，随时可还原；支持 CLI --dry-run 只读体检。";
+            "   • 永不触碰：.dsh/profiles（含插件联接）、dsh-runtimes、skills 联接、sessions、.credentials.yaml 与登录态。\n\n" +
+            "4. Claude Code 专区（v3.0 严格只读诊断模式）\n" +
+            "   • 永不触碰：.claude 全目录（含 file-history 编辑回滚副本、shell-snapshots、projects 与凭据），删除候选数恒为 0，仅提供空间雷达只读透视。\n\n" +
+            "5. AI 工具链与模型雷达\n" +
+            "   • 仅 uv / pip / npm 超期纯下载缓存开放绿区清理（自动跳过 NTFS 联接）；pnpm 硬链接库、Playwright/Puppeteer 浏览器与 Hugging Face/Ollama/LM Studio 均严格只读，绝不误删或虚报释放量。\n\n" +
+            "6. 通用铁律\n" +
+            "   • 引擎编译期全局硬保护 .ssh/.gnupg/.aws/.kube/Documents/Desktop；全祖先链联接校验；绝不强杀运行中桌面进程；支持 CLI --dry-run --json 只读集成。";
         MessageBox.Show(this, msg, "红线保护说明", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
-    private static string GetZoneName(ZoneId z) => z switch
-    {
-        ZoneId.Antigravity => "Antigravity 专区",
-        ZoneId.GptCodex => "GPT / Codex 专区",
-        ZoneId.DeepSeekHarness => "DeepSeek Harness 专区",
-        _ => z.ToString()
-    };
+    private static string GetZoneName(ZoneId z) => ZoneCatalog.Get(z).DisplayName;
 }

@@ -217,57 +217,21 @@ public static class GlassDialogs
 
         var win = new Window
         {
-            Title = "扫描阈值设置与白名单管理",
+            Title = "策略阈值、白名单与自定义工作区管理",
             Owner = owner,
-            Width = 680,
-            Height = 520,
+            Width = 740,
+            Height = 580,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             Background = new LinearGradientBrush(Color.FromRgb(246, 250, 255), Color.FromRgb(230, 241, 255), 45),
             FontFamily = new FontFamily("Microsoft YaHei UI"),
             Foreground = new SolidColorBrush(Color.FromRgb(15, 33, 61)),
-            ResizeMode = ResizeMode.NoResize
+            ResizeMode = ResizeMode.CanResizeWithGrip,
+            MinWidth = 660,
+            MinHeight = 520
         };
         ApplyIceBlueTitleBar(win);
 
         var root = new DockPanel { Margin = new Thickness(18) };
-
-        // Top policy card
-        var policyCard = new Border
-        {
-            Background = new SolidColorBrush(Color.FromArgb(225, 255, 255, 255)),
-            BorderBrush = new SolidColorBrush(Color.FromRgb(207, 226, 248)),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(10),
-            Padding = new Thickness(14, 12, 14, 12),
-            Margin = new Thickness(0, 0, 0, 12)
-        };
-        var pStack = new StackPanel();
-        pStack.Children.Add(new TextBlock
-        {
-            Text = "扫描策略阈值（修改后立即持久化并重新扫描）",
-            FontSize = 13.5,
-            FontWeight = FontWeights.Bold,
-            Margin = new Thickness(0, 0, 0, 10)
-        });
-
-        var pGrid = new Grid();
-        pGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        pGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
-        pGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        pGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
-        pGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-        var cmbTempDays = MakeChoiceBox(new[] { 1, 3, 7, 14 }, current.TempMinAgeDays, " 天");
-        var cmbWsMB = MakeChoiceBox(new[] { 50, 100, 200, 500 }, current.WorkspaceMinSizeMB, " MB");
-        var cmbWsDays = MakeChoiceBox(new[] { 3, 7, 14, 30 }, current.WorkspaceMinAgeDays, " 天");
-
-        pGrid.Children.Add(MakeLabeledField("临时缓存保留天数", cmbTempDays, 0));
-        pGrid.Children.Add(MakeLabeledField("工作区大目录体积门槛", cmbWsMB, 2));
-        pGrid.Children.Add(MakeLabeledField("工作区最小静置宽限期", cmbWsDays, 4));
-        pStack.Children.Add(pGrid);
-        policyCard.Child = pStack;
-        DockPanel.SetDock(policyCard, Dock.Top);
-        root.Children.Add(policyCard);
 
         // Footer buttons
         var footer = new StackPanel
@@ -296,10 +260,57 @@ public static class GlassDialogs
         DockPanel.SetDock(footer, Dock.Bottom);
         root.Children.Add(footer);
 
-        // Whitelist card
+        // 2-Tab Frosted Glass Settings Container
+        var tabs = new TabControl
+        {
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            FontSize = 12.5
+        };
+
+        // === TAB 1: Policy Thresholds & Whitelist ===
+        var tab1Panel = new DockPanel { Margin = new Thickness(0, 8, 0, 0) };
+
+        var policyCard = new Border
+        {
+            Background = new SolidColorBrush(Color.FromArgb(228, 255, 255, 255)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(207, 226, 248)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(14, 12, 14, 12),
+            Margin = new Thickness(0, 0, 0, 12)
+        };
+        var pStack = new StackPanel();
+        pStack.Children.Add(new TextBlock
+        {
+            Text = "扫描策略阈值（修改后原子落盘并立即生效）",
+            FontSize = 13.5,
+            FontWeight = FontWeights.Bold,
+            Margin = new Thickness(0, 0, 0, 10)
+        });
+
+        var pGrid = new Grid();
+        pGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        pGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
+        pGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        pGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
+        pGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var cmbTempDays = MakeChoiceBox(new[] { 1, 3, 7, 14 }, current.TempMinAgeDays, " 天");
+        var cmbWsMB = MakeChoiceBox(new[] { 50, 100, 200, 500 }, current.WorkspaceMinSizeMB, " MB");
+        var cmbWsDays = MakeChoiceBox(new[] { 3, 7, 14, 30 }, current.WorkspaceMinAgeDays, " 天");
+
+        pGrid.Children.Add(MakeLabeledField("临时缓存保留天数", cmbTempDays, 0));
+        pGrid.Children.Add(MakeLabeledField("工作区大目录体积门槛", cmbWsMB, 2));
+        pGrid.Children.Add(MakeLabeledField("工作区最小静置宽限期", cmbWsDays, 4));
+        pStack.Children.Add(pGrid);
+        policyCard.Child = pStack;
+        DockPanel.SetDock(policyCard, Dock.Top);
+        tab1Panel.Children.Add(policyCard);
+
         var wlCard = new Border
         {
-            Background = new SolidColorBrush(Color.FromArgb(225, 255, 255, 255)),
+            Background = new SolidColorBrush(Color.FromArgb(228, 255, 255, 255)),
             BorderBrush = new SolidColorBrush(Color.FromRgb(207, 226, 248)),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(10),
@@ -311,7 +322,7 @@ public static class GlassDialogs
         wlTop.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         wlTop.Children.Add(new TextBlock
         {
-            Text = "用户永久保留白名单（在主列表右键或点「加入白名单」即可添加）",
+            Text = "用户永久保留白名单（主列表右键可一键加入）",
             FontSize = 13,
             FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center
@@ -337,7 +348,7 @@ public static class GlassDialogs
         foreach (var p in current.WhitelistedPaths) wlList.Items.Add(p);
         wlDock.Children.Add(wlList);
         wlCard.Child = wlDock;
-        root.Children.Add(wlCard);
+        tab1Panel.Children.Add(wlCard);
 
         btnRemoveWl.Click += (_, _) =>
         {
@@ -349,12 +360,162 @@ public static class GlassDialogs
             }
         };
 
+        tabs.Items.Add(new TabItem { Header = "策略阈值与白名单", Content = tab1Panel });
+
+        // === TAB 2: GUI Custom Workspaces, Codex Cache Root & Extra Protected Redlines ===
+        static string? PickFolder(Window ownerWin, string title)
+        {
+            var dlg = new Microsoft.Win32.OpenFolderDialog { Title = title };
+            return dlg.ShowDialog(ownerWin) == true ? dlg.FolderName : null;
+        }
+
+        var tab2Grid = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+        tab2Grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        tab2Grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(10) });
+        tab2Grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        tab2Grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(10) });
+        tab2Grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+        // Card 2A: Custom Codex Cache Root
+        var cacheCard = new Border
+        {
+            Background = new SolidColorBrush(Color.FromArgb(228, 255, 255, 255)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(207, 226, 248)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(14, 10, 14, 10)
+        };
+        var cacheStack = new StackPanel();
+        cacheStack.Children.Add(new TextBlock
+        {
+            Text = "自定义 Codex 缓存根目录（可选：如已迁移至其他磁盘；自动硬保护 runtimes / plugin-staging / command-staging）",
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 6)
+        });
+        var cacheRow = new Grid();
+        cacheRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        cacheRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        cacheRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var txtCodexCache = new TextBox
+        {
+            Text = current.CustomCodexCacheRoot,
+            Height = 30,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Padding = new Thickness(8, 0, 8, 0),
+            FontSize = 12,
+            Background = new SolidColorBrush(Color.FromArgb(220, 244, 249, 255)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(198, 222, 248))
+        };
+        var btnBrowseCache = new Button
+        {
+            Content = "选择目录",
+            Style = (Style)Application.Current.FindResource("GlassBtn"),
+            Margin = new Thickness(8, 0, 6, 0),
+            Padding = new Thickness(10, 4, 10, 4)
+        };
+        var btnClearCache = new Button
+        {
+            Content = "清空",
+            Style = (Style)Application.Current.FindResource("GlassBtn"),
+            Padding = new Thickness(10, 4, 10, 4)
+        };
+        btnBrowseCache.Click += (_, _) =>
+        {
+            var picked = PickFolder(win, "选择自定义 Codex 缓存根目录");
+            if (!string.IsNullOrWhiteSpace(picked)) txtCodexCache.Text = picked;
+        };
+        btnClearCache.Click += (_, _) => txtCodexCache.Text = "";
+        Grid.SetColumn(btnBrowseCache, 1);
+        Grid.SetColumn(btnClearCache, 2);
+        cacheRow.Children.Add(txtCodexCache);
+        cacheRow.Children.Add(btnBrowseCache);
+        cacheRow.Children.Add(btnClearCache);
+        cacheStack.Children.Add(cacheRow);
+        cacheCard.Child = cacheStack;
+        Grid.SetRow(cacheCard, 0);
+        tab2Grid.Children.Add(cacheCard);
+
+        // Card 2B: Extra Workspace Roots
+        var wsList = new ListBox
+        {
+            Background = new SolidColorBrush(Color.FromArgb(180, 244, 249, 255)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(215, 232, 250)),
+            BorderThickness = new Thickness(1),
+            FontSize = 12
+        };
+        foreach (var p in current.ExtraWorkspaceRoots) wsList.Items.Add(p);
+        var wsCard = BuildFolderListCard(
+            "自定义 AI 工作区目录（仅授予扫描范围，大目录均走回收站，绝不扩张绕过红线的删除权限）",
+            wsList,
+            () =>
+            {
+                var picked = PickFolder(win, "添加要纳入体检的工作区根目录");
+                if (string.IsNullOrWhiteSpace(picked)) return;
+                if (!SafetyGuard.ValidateCustomRootPath(picked, out var err) || !SafetyGuard.TryNormalizePath(picked, out var norm))
+                {
+                    MessageBox.Show(win, err, "安全拦截", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                if (wsList.Items.Cast<string>().Any(x => SafetyGuard.NormalizePath(x) == norm)) return;
+                wsList.Items.Add(picked);
+            });
+        Grid.SetRow(wsCard, 2);
+        tab2Grid.Children.Add(wsCard);
+
+        // Card 2C: Extra Protected Subtrees
+        var protList = new ListBox
+        {
+            Background = new SolidColorBrush(Color.FromArgb(180, 244, 249, 255)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(215, 232, 250)),
+            BorderThickness = new Thickness(1),
+            FontSize = 12
+        };
+        foreach (var p in current.ExtraProtectedSubtrees) protList.Items.Add(p);
+        var protCard = BuildFolderListCard(
+            "额外硬保护目录（永久禁止删除其自身、子目录与任何祖先目录）",
+            protList,
+            () =>
+            {
+                var picked = PickFolder(win, "添加额外硬保护目录");
+                if (string.IsNullOrWhiteSpace(picked)) return;
+                if (!SafetyGuard.TryNormalizePath(picked, out var norm)) return;
+                if (protList.Items.Cast<string>().Any(x => SafetyGuard.NormalizePath(x) == norm)) return;
+                protList.Items.Add(picked);
+            });
+        Grid.SetRow(protCard, 4);
+        tab2Grid.Children.Add(protCard);
+
+        tabs.Items.Add(new TabItem { Header = "自定义工作区与红区目录", Content = tab2Grid });
+        root.Children.Add(tabs);
+
         btnSave.Click += (_, _) =>
         {
+            string cacheRoot = txtCodexCache.Text.Trim();
+            if (!string.IsNullOrEmpty(cacheRoot) && !SafetyGuard.ValidateCustomRootPath(cacheRoot, out var cacheErr))
+            {
+                MessageBox.Show(win, $"自定义 Codex 缓存根目录校验未通过：\n{cacheErr}", "安全拦截", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            var validatedWs = new List<string>();
+            foreach (var rawWs in wsList.Items.Cast<string>())
+            {
+                if (!SafetyGuard.ValidateCustomRootPath(rawWs, out var wsErr))
+                {
+                    MessageBox.Show(win, $"工作区目录「{rawWs}」校验未通过：\n{wsErr}", "安全拦截", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                validatedWs.Add(rawWs);
+            }
+
             var fresh = SettingsStore.Load();
             fresh.TempMinAgeDays = (int)((ComboBoxItem)cmbTempDays.SelectedItem).Tag;
             fresh.WorkspaceMinSizeMB = (int)((ComboBoxItem)cmbWsMB.SelectedItem).Tag;
             fresh.WorkspaceMinAgeDays = (int)((ComboBoxItem)cmbWsDays.SelectedItem).Tag;
+            fresh.CustomCodexCacheRoot = cacheRoot;
+            fresh.ExtraWorkspaceRoots = validatedWs;
+            fresh.ExtraProtectedSubtrees = protList.Items.Cast<string>().ToList();
             SettingsStore.Save(fresh);
             changed = true;
             win.Close();
@@ -363,6 +524,56 @@ public static class GlassDialogs
         win.Content = root;
         win.ShowDialog();
         return changed;
+    }
+
+    private static Border BuildFolderListCard(string headerText, ListBox listBox, Action onAdd)
+    {
+        var card = new Border
+        {
+            Background = new SolidColorBrush(Color.FromArgb(228, 255, 255, 255)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(207, 226, 248)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(14, 10, 14, 10)
+        };
+        var dock = new DockPanel();
+        var top = new Grid { Margin = new Thickness(0, 0, 0, 7) };
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        top.Children.Add(new TextBlock
+        {
+            Text = headerText,
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        });
+
+        var btns = new StackPanel { Orientation = Orientation.Horizontal };
+        var btnAdd = new Button
+        {
+            Content = "+ 添加目录",
+            Style = (Style)Application.Current.FindResource("GlassBtn"),
+            Padding = new Thickness(10, 3.5, 10, 3.5),
+            Margin = new Thickness(8, 0, 6, 0)
+        };
+        var btnRem = new Button
+        {
+            Content = "移除选中",
+            Style = (Style)Application.Current.FindResource("GlassBtn"),
+            Padding = new Thickness(10, 3.5, 10, 3.5)
+        };
+        btnAdd.Click += (_, _) => onAdd();
+        btnRem.Click += (_, _) => { if (listBox.SelectedItem != null) listBox.Items.Remove(listBox.SelectedItem); };
+        btns.Children.Add(btnAdd);
+        btns.Children.Add(btnRem);
+        Grid.SetColumn(btns, 1);
+        top.Children.Add(btns);
+        DockPanel.SetDock(top, Dock.Top);
+        dock.Children.Add(top);
+        dock.Children.Add(listBox);
+        card.Child = dock;
+        return card;
     }
 
     /// <summary>Roomy / Mole inspired interactive Read-Only Space Map & Top-N Large File Radar.</summary>

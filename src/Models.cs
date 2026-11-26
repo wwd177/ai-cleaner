@@ -8,15 +8,25 @@ public enum ZoneId
 {
     Antigravity,
     GptCodex,
-    DeepSeekHarness
+    DeepSeekHarness,
+    ClaudeCode,
+    AiToolchains
+}
+
+public enum ScanStatus
+{
+    Ok,
+    Partial,
+    Cancelled,
+    Error
 }
 
 public enum CleanTier
 {
     SafeOnline,       // 绿区：应用运行中也可安全清理超期未占用文件
     RecycleCandidate, // 黄区：人工勾选后移入 Windows 回收站（可撤销）
-    OfflineCache,     // 橙区：需先退出该专区应用后清理内部文件（保留目录骨架与联接）
-    ProtectedSkipped  // 红区 / 白名单 / 含联接 / 72h 活跃：自动保护跳过，禁止勾选
+    OfflineCache,     // 蓝区：需先退出该专区应用后清理内部文件（保留目录骨架与联接）
+    ProtectedSkipped  // 红区 / 只读诊断雷达 / 白名单 / 含联接 / 72h 活跃：自动保护跳过，禁止勾选
 }
 
 public enum CleanActionType
@@ -54,6 +64,7 @@ public sealed class CleanCandidate : INotifyPropertyChanged
     public bool PruneEmptySubdirs { get; set; }
     public bool IsRecommended { get; set; }
     public bool IsUserWhitelisted { get; set; }
+    public bool IsReadOnlyDiagnostic { get; set; }
     public bool EnforceActive72hFloor { get; set; } = true;
     public string ActionHint { get; set; } = "";
 
@@ -65,9 +76,10 @@ public sealed class CleanCandidate : INotifyPropertyChanged
         get => _canSelect;
         set
         {
-            if (_canSelect != value)
+            bool effective = !IsReadOnlyDiagnostic && value;
+            if (_canSelect != effective)
             {
-                _canSelect = value;
+                _canSelect = effective;
                 if (!_canSelect && _isSelected)
                 {
                     _isSelected = false;
@@ -112,7 +124,7 @@ public sealed class CleanCandidate : INotifyPropertyChanged
         get => _isSelected;
         set
         {
-            var next = CanSelect && value;
+            var next = CanSelect && !IsReadOnlyDiagnostic && value;
             if (_isSelected != next)
             {
                 _isSelected = next;
@@ -134,7 +146,7 @@ public sealed class CleanCandidate : INotifyPropertyChanged
         }
     }
 
-    public string SizeText => (Tier == CleanTier.ProtectedSkipped && SizeBytes == 0) ? "受保护" : FormatBytes(SizeBytes);
+    public string SizeText => (Tier == CleanTier.ProtectedSkipped && SizeBytes == 0 && !IsReadOnlyDiagnostic) ? "受保护" : FormatBytes(SizeBytes);
     public string LastWriteText => NewestWriteLocal == DateTime.MinValue ? "-" : NewestWriteLocal.ToString("yyyy-MM-dd HH:mm");
 
     // Kleaner-style Plain-English Impact Verdict shown in the bottom Inspector Strip
@@ -144,6 +156,8 @@ public sealed class CleanCandidate : INotifyPropertyChanged
         {
             if (IsUserWhitelisted)
                 return "已加入用户永久白名单：扫描与清理均会自动跳过，如需取消可在右键或「规则/白名单」中移出。";
+            if (IsReadOnlyDiagnostic)
+                return "只读诊断雷达 · 绝不自动删除：此项涉及用户历史回滚、硬链接存储、锁定版本浏览器或断点续传模型，仅展示体积供「空间雷达」查看。";
             return Tier switch
             {
                 CleanTier.SafeOnline => ActionType == CleanActionType.RecycleExpiredChildren || ActionType == CleanActionType.RecycleBatchDirectories
@@ -164,6 +178,7 @@ public sealed class CleanCandidate : INotifyPropertyChanged
         get
         {
             if (IsUserWhitelisted) return "白名单 · 保留";
+            if (IsReadOnlyDiagnostic) return "只读 · 诊断雷达";
             return Tier switch
             {
                 CleanTier.SafeOnline => "绿 · 在线安全",
@@ -181,6 +196,7 @@ public sealed class CleanCandidate : INotifyPropertyChanged
         get
         {
             if (IsUserWhitelisted) return "#E6F3FF";
+            if (IsReadOnlyDiagnostic) return "#E6F7F7";
             return Tier switch
             {
                 CleanTier.SafeOnline => "#E4F8EF",
@@ -197,6 +213,7 @@ public sealed class CleanCandidate : INotifyPropertyChanged
         get
         {
             if (IsUserWhitelisted) return "#A7D0FC";
+            if (IsReadOnlyDiagnostic) return "#99E0DC";
             return Tier switch
             {
                 CleanTier.SafeOnline => "#9FE3C5",
@@ -213,6 +230,7 @@ public sealed class CleanCandidate : INotifyPropertyChanged
         get
         {
             if (IsUserWhitelisted) return "#1B5BB8";
+            if (IsReadOnlyDiagnostic) return "#0F766E";
             return Tier switch
             {
                 CleanTier.SafeOnline => "#0A7548",
@@ -252,13 +270,19 @@ public sealed class ZoneScanReport
 {
     public ZoneId Zone { get; set; }
     public DateTime ScannedAt { get; set; } = DateTime.Now;
+    public ScanStatus Status { get; set; } = ScanStatus.Ok;
+    public int AccessDeniedCount { get; set; }
+    public long ElapsedMs { get; set; }
+    public bool IsDetected { get; set; }
+    public string? ErrorMessage { get; set; }
     public ZoneProcessInfo ProcessInfo { get; set; } = new();
     public List<CleanCandidate> Candidates { get; set; } = new();
 
-    public long SafeOnlineBytes => Candidates.Where(c => c.Tier == CleanTier.SafeOnline && c.CanSelect).Sum(c => c.SizeBytes);
-    public long RecycleCandidateBytes => Candidates.Where(c => c.Tier == CleanTier.RecycleCandidate && c.CanSelect).Sum(c => c.SizeBytes);
-    public long RecommendedBytes => Candidates.Where(c => c.IsRecommended && c.CanSelect).Sum(c => c.SizeBytes);
-    public long OfflineCacheBytes => Candidates.Where(c => c.Tier == CleanTier.OfflineCache).Sum(c => c.SizeBytes);
+    public long SafeOnlineBytes => Candidates.Where(c => c.Tier == CleanTier.SafeOnline && c.CanSelect && !c.IsReadOnlyDiagnostic).Sum(c => c.SizeBytes);
+    public long RecycleCandidateBytes => Candidates.Where(c => c.Tier == CleanTier.RecycleCandidate && c.CanSelect && !c.IsReadOnlyDiagnostic).Sum(c => c.SizeBytes);
+    public long RecommendedBytes => Candidates.Where(c => c.IsRecommended && c.CanSelect && !c.IsReadOnlyDiagnostic).Sum(c => c.SizeBytes);
+    public long OfflineCacheBytes => Candidates.Where(c => c.Tier == CleanTier.OfflineCache && !c.IsReadOnlyDiagnostic).Sum(c => c.SizeBytes);
+    public long DiagnosticBytes => Candidates.Where(c => c.IsReadOnlyDiagnostic).Sum(c => c.SizeBytes);
     public long ProtectedBytes => Candidates.Where(c => c.Tier == CleanTier.ProtectedSkipped).Sum(c => c.SizeBytes);
 }
 
@@ -287,13 +311,7 @@ public sealed class CleanRunAudit
     public string DisplayTime =>
         DateTime.TryParse(Timestamp, out var dt) ? dt.ToString("yyyy-MM-dd HH:mm:ss") : Timestamp;
     public string FreedText => CleanCandidate.FormatBytes(TotalFreedBytes);
-    public string ZoneLabel => Zone switch
-    {
-        nameof(ZoneId.Antigravity) => "Antigravity 专区",
-        nameof(ZoneId.GptCodex) => "GPT / Codex 专区",
-        nameof(ZoneId.DeepSeekHarness) => "DeepSeek Harness",
-        _ => Zone
-    };
+    public string ZoneLabel => ZoneCatalog.GetByNameOrSlug(Zone)?.DisplayName ?? Zone;
     public string SummaryLine =>
         $"成功 {Outcomes.Count(o => o.Succeeded)} 项 · 跳过/拦截 {Outcomes.Count(o => o.Blocked)} 项 · 释放 {FreedText}";
 }
@@ -316,4 +334,58 @@ public sealed class SpaceMapEntry
     public double BarWidth => Math.Max(4, Math.Min(112, ShareRatio * 112.0));
     public string LastWriteText => LastWriteLocal == DateTime.MinValue ? "-" : LastWriteLocal.ToString("yyyy-MM-dd HH:mm");
     public string ProtectionNote => IsReparsePoint ? "NTFS 联接（禁止穿越）" : (IsProtected ? "红区/白名单保护" : "");
+}
+
+public sealed class ZoneSidebarItem : INotifyPropertyChanged
+{
+    private bool _isSelected;
+    private bool _isRunning;
+    private bool _isDetected;
+    private string _procText = "检测进程中...";
+    private string _summaryText = "准备扫描...";
+
+    public required ZoneDefinition Definition { get; init; }
+    public ZoneId Zone => Definition.Id;
+    public string ShortName => Definition.ShortName;
+    public string AccentHex => Definition.AccentHex;
+    public string IconBgHex => Definition.IconBgHex;
+    public string IconPathData => Definition.IconPathData;
+    public bool IconFillMode => Definition.IconFillMode;
+    public bool IsReadOnlyZone => Definition.IsReadOnlyZone;
+
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set { if (_isSelected != value) { _isSelected = value; OnPropertyChanged(); } }
+    }
+
+    public bool IsRunning
+    {
+        get => _isRunning;
+        set { if (_isRunning != value) { _isRunning = value; OnPropertyChanged(); OnPropertyChanged(nameof(DotColorHex)); } }
+    }
+
+    public bool IsDetected
+    {
+        get => _isDetected;
+        set { if (_isDetected != value) { _isDetected = value; OnPropertyChanged(); } }
+    }
+
+    public string ProcText
+    {
+        get => _procText;
+        set { if (_procText != value) { _procText = value; OnPropertyChanged(); } }
+    }
+
+    public string SummaryText
+    {
+        get => _summaryText;
+        set { if (_summaryText != value) { _summaryText = value; OnPropertyChanged(); } }
+    }
+
+    public string DotColorHex => IsRunning ? "#10B981" : (IsReadOnlyZone ? "#D97706" : "#8AA0BC");
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    private void OnPropertyChanged([CallerMemberName] string? name = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }

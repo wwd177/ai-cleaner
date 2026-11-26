@@ -13,6 +13,7 @@ public sealed class DirStats
     public long FileCount;
     public long DirCount;
     public long JunctionCount;
+    public int AccessDeniedCount;
     public DateTime NewestWriteUtc = DateTime.MinValue;
     public bool RootIsJunction;
 }
@@ -28,6 +29,8 @@ public sealed class SweepStats
     public long SkippedRecent;
     public long SkippedJunctions;
     public long SkippedProtected;
+    public int AccessDeniedCount;
+    public bool AbortedByCallback;
     public DateTime NewestEligibleUtc = DateTime.MinValue;
     public List<string> Errors = new();
 }
@@ -56,6 +59,30 @@ public static class SafetyGuard
     // Shared scratch directory allowlist enforced independently by BOTH scanner and executor for RecycleBatchDirectories.
     public static readonly HashSet<string> AllowedBatchScratchNames = new(StringComparer.OrdinalIgnoreCase)
         { "_tmp", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".parcel-cache", ".turbo" };
+
+    // Electron offline browser cache relative suffixes authorized for OfflineSweepFilesKeepSkeleton.
+    public static readonly string[] AuthorizedOfflineCacheSuffixes =
+    {
+        "cache", "cacheddata", "code cache", "gpucache", "grshadercache", "shadercache",
+        "dawngraphitecache", "dawnwebgpucache", "blob_storage",
+        @"service worker\cachestorage", @"crashpad\reports", @"crashpad\pending"
+    };
+
+    private static readonly string[] SystemDangerousRoots = BuildSystemDangerousRoots();
+
+    private static string[] BuildSystemDangerousRoots()
+    {
+        var raw = new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            @"C:\Program Files\WindowsApps"
+        };
+        return raw.Select(NormalizePath).Where(x => !string.IsNullOrEmpty(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
 
     private static string[] BuildProtectedSubtrees()
     {
@@ -131,6 +158,27 @@ public static class SafetyGuard
             Path.Combine(Roaming, @"@deepseek-ai\dsh-desktop\WebStorage"),
             Path.Combine(Roaming, @"@deepseek-ai\dsh-desktop\Preferences"),
             Path.Combine(Roaming, @"@deepseek-ai\dsh-desktop\Local State"),
+
+            // === Claude Code Red-Zone (v3.0 strict read-only diagnostic mode: protects file-history, shell-snapshots, projects & credentials!) ===
+            Path.Combine(UserHome, @".claude"),
+            Path.Combine(UserHome, @".claude.json"),
+
+            // === AI Toolchains & Local Model Read-Only Red-Zone (hardlinks, pinned browsers, resumable weights) ===
+            Path.Combine(LocalApp, @"pnpm\store"),
+            Path.Combine(LocalApp, @"ms-playwright"),
+            Path.Combine(UserHome, @".cache\puppeteer"),
+            Path.Combine(UserHome, @".cache\huggingface"),
+            Path.Combine(UserHome, @".cache\modelscope"),
+            Path.Combine(UserHome, @".ollama"),
+            Path.Combine(UserHome, @".cache\lm-studio"),
+
+            // === Global User Personal & Credential Defense-in-Depth Redlines ===
+            Path.Combine(UserHome, @".ssh"),
+            Path.Combine(UserHome, @".gnupg"),
+            Path.Combine(UserHome, @".aws"),
+            Path.Combine(UserHome, @".kube"),
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
         };
 
         var all = new List<string>(raw);
@@ -392,12 +440,271 @@ public static class SafetyGuard
         }
     }
 
-    /// <summary>Verifies a candidate path for RecycleBatchDirectories belongs to configured workspace roots & scratch leaf names.</summary>
+    /// <summary>
+    /// Validates any user-supplied custom root path (CustomCodexCacheRoot / ExtraWorkspaceRoots / ExtraBackupDirs)
+    /// both at GUI save time and at scan/execution time. Fail-closed against drive roots, OS directories,
+    /// user profile containers, hardcoded redline trees/ancestors, and NTFS reparse-point chains.
+    /// </summary>
+    public static bool ValidateCustomRootPath(string? rawPath, out string error)
+    {
+        error = "";
+        if (string.IsNullOrWhiteSpace(rawPath))
+        {
+            error = "路径不能为空。";
+            return false;
+        }
+        string trimmed = rawPath.Trim();
+        if (!Path.IsPathFullyQualified(trimmed) || !TryNormalizePath(trimmed, out var key))
+        {
+            error = "必须是合法的绝对目录路径，且不能选择盘符根目录（如 C:\\）。";
+            return false;
+        }
+
+        // Block Windows / Program Files / ProgramData roots and their ancestors/subtrees
+        foreach (var sys in SystemDangerousRoots)
+        {
+            if (key == sys || key.StartsWith(sys + "\\", StringComparison.OrdinalIgnoreCase) ||
+                sys.StartsWith(key + "\\", StringComparison.OrdinalIgnoreCase))
+            {
+                error = "禁止将系统目录或其父/子目录设为缓存或工作区根目录。";
+                return false;
+            }
+        }
+
+        // Block UserHome / AppData / LocalAppData / Roaming themselves or their ancestors
+        foreach (var core in new[] { UserHome, LocalApp, Roaming })
+        {
+            if (TryNormalizePath(core, out var coreNorm) &&
+                (key == coreNorm || coreNorm.StartsWith(key + "\\", StringComparison.OrdinalIgnoreCase)))
+            {
+                error = "不能将用户主目录或 AppData 根目录设为缓存或工作区根目录，请选择更具体的子目录。";
+                return false;
+            }
+        }
+
+        // Block hardcoded redline subtrees (exact, child, or ancestor of any redline like .codex/.claude/.ssh/Documents/Desktop)
+        if (IsHardSubtreeMatch(key, protectAncestors: true))
+        {
+            error = "目标路径与引擎硬保护红区（如 .codex / .claude / .gemini / .dsh / .ssh / Documents / Desktop）重叠或为其祖先目录，已拦截。";
+            return false;
+        }
+
+        // If the directory already exists on disk, ensure no ancestor segment is a reparse point / NTFS junction
+        if ((Directory.Exists(trimmed) || File.Exists(trimmed)) && HasReparsePointInChain(trimmed))
+        {
+            error = "目标路径或其祖先目录包含 NTFS 目录联接/符号链接，禁止配置为工作区或缓存根。";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsDirectChildOf(string key, string parentDir)
+    {
+        if (!TryNormalizePath(parentDir, out var pNorm)) return false;
+        if (!key.StartsWith(pNorm + "\\", StringComparison.OrdinalIgnoreCase)) return false;
+        string rest = key[(pNorm.Length + 1)..];
+        return rest.Length > 0 && !rest.Contains('\\');
+    }
+
+    private static bool MatchesAuthorizedOfflineUnder(string key, string baseDir, bool allowPartitions)
+    {
+        if (!TryNormalizePath(baseDir, out var bNorm)) return false;
+        if (!key.StartsWith(bNorm + "\\", StringComparison.OrdinalIgnoreCase)) return false;
+        string rel = key[(bNorm.Length + 1)..];
+        foreach (var sfx in AuthorizedOfflineCacheSuffixes)
+        {
+            if (rel.Equals(sfx, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        if (allowPartitions && rel.StartsWith(@"partitions\", StringComparison.OrdinalIgnoreCase))
+        {
+            string afterPart = rel[@"partitions\".Length..];
+            int slash = afterPart.IndexOf('\\');
+            if (slash > 0 && slash + 1 < afterPart.Length)
+            {
+                string subRel = afterPart[(slash + 1)..];
+                foreach (var sfx in AuthorizedOfflineCacheSuffixes)
+                {
+                    if (subRel.Equals(sfx, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Unified engine-side execution authorization gate: re-validates (Zone, ActionType, Path) against
+    /// compiled authorized targets and validated SettingsStore roots right before any physical mutation.
+    /// </summary>
+    public static bool IsAuthorizedExecutionTarget(CleanCandidate item, out string reason)
+    {
+        reason = "";
+        var def = ZoneCatalog.Get(item.Zone);
+        if (def.IsReadOnlyZone || item.IsReadOnlyDiagnostic)
+        {
+            reason = "只读诊断专区/项目，严禁执行任何删除操作";
+            return false;
+        }
+
+        // RecycleBatchDirectories validates each individual BatchPaths entry independently
+        if (item.ActionType == CleanActionType.RecycleBatchDirectories)
+        {
+            if (item.Zone != ZoneId.GptCodex)
+            {
+                reason = "仅 GPT / Codex 专区支持工作区临时目录批量回收";
+                return false;
+            }
+            return true;
+        }
+
+        if (!TryNormalizePath(item.Path, out var key))
+        {
+            reason = "目标路径非法或为盘符根目录，已拦截";
+            return false;
+        }
+
+        static bool EqualsAny(string k, params string[] paths)
+        {
+            foreach (var p in paths)
+            {
+                if (TryNormalizePath(p, out var n) && k == n) return true;
+            }
+            return false;
+        }
+
+        var settings = SettingsStore.Load();
+
+        switch (item.Zone)
+        {
+            case ZoneId.ClaudeCode:
+                reason = "Claude Code 专区为严格只读诊断模式，禁止执行删除";
+                return false;
+
+            case ZoneId.AiToolchains:
+                if (item.ActionType == CleanActionType.SweepExpiredFiles &&
+                    EqualsAny(key,
+                        Path.Combine(LocalApp, @"uv\cache"),
+                        Path.Combine(LocalApp, @"pip\Cache"),
+                        Path.Combine(LocalApp, "npm-cache"),
+                        Path.Combine(Roaming, "npm-cache")))
+                {
+                    return true;
+                }
+                reason = "AI 工具链专区仅授权清理 uv / pip / npm 四个官方下载缓存目录，其余路径一律拦截";
+                return false;
+
+            case ZoneId.Antigravity:
+                if (item.ActionType == CleanActionType.RecycleExpiredChildren &&
+                    EqualsAny(key, Path.Combine(LocalApp, @"antigravity-updater\pending")))
+                    return true;
+
+                if (item.ActionType == CleanActionType.SweepExpiredFiles &&
+                    EqualsAny(key,
+                        Path.Combine(UserHome, @".gemini\antigravity\cache"),
+                        Path.Combine(UserHome, @".gemini\antigravity\crashes"),
+                        Path.Combine(UserHome, @".gemini\logs"),
+                        Path.Combine(Roaming, @"Antigravity\logs"),
+                        Path.Combine(UserHome, @".gemini\antigravity\scratch")))
+                    return true;
+
+                if (item.ActionType == CleanActionType.RecycleDirectoryOrFile)
+                {
+                    if (IsDirectChildOf(key, Path.Combine(UserHome, @".gemini\antigravity\brain")))
+                        return true;
+                    foreach (var bdir in settings.ExtraBackupDirs)
+                    {
+                        if (ValidateCustomRootPath(bdir, out _) && TryNormalizePath(bdir, out var bNorm) && key == bNorm)
+                            return true;
+                    }
+                }
+
+                if (item.ActionType == CleanActionType.OfflineSweepFilesKeepSkeleton &&
+                    (MatchesAuthorizedOfflineUnder(key, Path.Combine(Roaming, "Antigravity"), allowPartitions: true) ||
+                     MatchesAuthorizedOfflineUnder(key, Path.Combine(Roaming, "Antigravity IDE"), allowPartitions: false)))
+                    return true;
+
+                reason = "目标路径不在 Antigravity 专区授权清理清单内，已拦截";
+                return false;
+
+            case ZoneId.GptCodex:
+                if (item.ActionType == CleanActionType.SweepExpiredFiles &&
+                    !string.IsNullOrWhiteSpace(settings.CustomCodexCacheRoot) &&
+                    ValidateCustomRootPath(settings.CustomCodexCacheRoot, out _) &&
+                    EqualsAny(key,
+                        Path.Combine(settings.CustomCodexCacheRoot, "temp"),
+                        Path.Combine(settings.CustomCodexCacheRoot, "pip"),
+                        Path.Combine(settings.CustomCodexCacheRoot, "npm"),
+                        Path.Combine(settings.CustomCodexCacheRoot, "uv")))
+                    return true;
+
+                if (item.ActionType == CleanActionType.OfflineSweepFilesKeepSkeleton &&
+                    !string.IsNullOrWhiteSpace(settings.CustomCodexCacheRoot) &&
+                    ValidateCustomRootPath(settings.CustomCodexCacheRoot, out _) &&
+                    EqualsAny(key,
+                        Path.Combine(settings.CustomCodexCacheRoot, "browser-cache"),
+                        Path.Combine(settings.CustomCodexCacheRoot, "desktop-logs")))
+                    return true;
+
+                if (item.ActionType == CleanActionType.RecycleDirectoryOrFile)
+                {
+                    foreach (var ws in settings.ExtraWorkspaceRoots)
+                    {
+                        if (ValidateCustomRootPath(ws, out _) && TryNormalizePath(ws, out var wNorm) &&
+                            key.StartsWith(wNorm + "\\", StringComparison.OrdinalIgnoreCase))
+                            return true;
+                    }
+                }
+
+                reason = "目标路径不在 GPT / Codex 专区授权清理清单内，已拦截";
+                return false;
+
+            case ZoneId.DeepSeekHarness:
+                if (item.ActionType == CleanActionType.RecycleExpiredChildren &&
+                    EqualsAny(key,
+                        Path.Combine(LocalApp, @"@deepseek-aidsh-desktop-updater\pending"),
+                        Path.Combine(UserHome, @".dsh\attachments")))
+                    return true;
+
+                if (item.ActionType == CleanActionType.SweepExpiredFiles &&
+                    EqualsAny(key,
+                        Path.Combine(UserHome, @".dsh\cache"),
+                        Path.Combine(Roaming, @"@deepseek-ai\dsh-desktop\logs")))
+                    return true;
+
+                if (item.ActionType == CleanActionType.RecycleDirectoryOrFile &&
+                    IsDirectChildOf(key, Path.Combine(UserHome, @".dsh\profile-backups")))
+                    return true;
+
+                if (item.ActionType == CleanActionType.OfflineSweepFilesKeepSkeleton &&
+                    MatchesAuthorizedOfflineUnder(key, Path.Combine(Roaming, @"@deepseek-ai\dsh-desktop"), allowPartitions: true))
+                    return true;
+
+                reason = "目标路径不在 DeepSeek Harness 专区授权清理清单内，已拦截";
+                return false;
+
+            default:
+                reason = "未知专区，拒绝执行清理";
+                return false;
+        }
+    }
+
+    /// <summary>Verifies a candidate path for RecycleBatchDirectories belongs to validated workspace roots & scratch leaf names.</summary>
     public static bool IsValidWorkspaceBatchMember(string dirPath)
     {
         if (!TryNormalizePath(dirPath, out var key)) return false;
-        var allowedRoots = SettingsStore.GetNormalizedExtraWorkspaceRoots();
-        bool underAllowedRoot = allowedRoots.Any(r => key.StartsWith(r + "\\", StringComparison.OrdinalIgnoreCase));
+        var rawRoots = SettingsStore.Load().ExtraWorkspaceRoots;
+        bool underAllowedRoot = false;
+        foreach (var raw in rawRoots)
+        {
+            if (ValidateCustomRootPath(raw, out _) && TryNormalizePath(raw, out var rNorm) &&
+                key.StartsWith(rNorm + "\\", StringComparison.OrdinalIgnoreCase))
+            {
+                underAllowedRoot = true;
+                break;
+            }
+        }
         if (!underAllowedRoot) return false;
         string leaf = Path.GetFileName(key);
         return AllowedBatchScratchNames.Contains(leaf);
@@ -459,10 +766,12 @@ public static class SafetyGuard
                         stats.FileCount++;
                         if (f.LastWriteTimeUtc > stats.NewestWriteUtc) stats.NewestWriteUtc = f.LastWriteTimeUtc;
                     }
+                    catch (UnauthorizedAccessException) { stats.AccessDeniedCount++; }
                     catch { }
                 }
             }
             catch (OperationCanceledException) { throw; }
+            catch (UnauthorizedAccessException) { stats.AccessDeniedCount++; }
             catch { }
 
             try
@@ -477,10 +786,12 @@ public static class SafetyGuard
                         if (d.LastWriteTimeUtc > stats.NewestWriteUtc) stats.NewestWriteUtc = d.LastWriteTimeUtc;
                         stack.Push(d.FullName);
                     }
+                    catch (UnauthorizedAccessException) { stats.AccessDeniedCount++; }
                     catch { }
                 }
             }
             catch (OperationCanceledException) { throw; }
+            catch (UnauthorizedAccessException) { stats.AccessDeniedCount++; }
             catch { }
         }
         return stats;
@@ -488,44 +799,24 @@ public static class SafetyGuard
 
     public static Dictionary<ZoneId, ZoneProcessInfo> GetAllZoneProcesses()
     {
-        var result = new Dictionary<ZoneId, ZoneProcessInfo>
+        var result = new Dictionary<ZoneId, ZoneProcessInfo>();
+        var nameLookup = new Dictionary<string, ZoneId>(StringComparer.OrdinalIgnoreCase);
+        foreach (var def in ZoneCatalog.All)
         {
-            [ZoneId.Antigravity] = new ZoneProcessInfo { Zone = ZoneId.Antigravity },
-            [ZoneId.GptCodex] = new ZoneProcessInfo { Zone = ZoneId.GptCodex },
-            [ZoneId.DeepSeekHarness] = new ZoneProcessInfo { Zone = ZoneId.DeepSeekHarness }
-        };
+            result[def.Id] = new ZoneProcessInfo { Zone = def.Id };
+            foreach (var pn in def.ProcessNames)
+                nameLookup.TryAdd(pn, def.Id);
+        }
 
-        // Fast single-pass ProcessName check (zero Win32Exception storms from MainModule on system processes!)
+        // Fast single-pass ProcessName check across all registered zones (zero Win32Exception storms!)
         foreach (var proc in Process.GetProcesses())
         {
             try
             {
                 string name = proc.ProcessName;
-                ZoneId? matched = null;
-
-                if (name.Equals("Antigravity", StringComparison.OrdinalIgnoreCase) ||
-                    name.Equals("Antigravity IDE", StringComparison.OrdinalIgnoreCase) ||
-                    name.Equals("language_server", StringComparison.OrdinalIgnoreCase))
+                if (nameLookup.TryGetValue(name, out var matched))
                 {
-                    matched = ZoneId.Antigravity;
-                }
-                else if (name.Equals("ChatGPT", StringComparison.OrdinalIgnoreCase) ||
-                         name.Equals("codex", StringComparison.OrdinalIgnoreCase) ||
-                         name.Equals("codex-code-mode-host", StringComparison.OrdinalIgnoreCase) ||
-                         name.Equals("codex-computer-use-swift", StringComparison.OrdinalIgnoreCase))
-                {
-                    matched = ZoneId.GptCodex;
-                }
-                else if (name.Equals("DeepSeek Harness", StringComparison.OrdinalIgnoreCase) ||
-                         name.Equals("dsh", StringComparison.OrdinalIgnoreCase) ||
-                         name.Equals("dsh-desktop", StringComparison.OrdinalIgnoreCase))
-                {
-                    matched = ZoneId.DeepSeekHarness;
-                }
-
-                if (matched.HasValue)
-                {
-                    var info = result[matched.Value];
+                    var info = result[matched];
                     info.RunningPids.Add(proc.Id);
                     if (!info.RunningProcesses.Contains(name, StringComparer.OrdinalIgnoreCase))
                         info.RunningProcesses.Add(name);
@@ -542,9 +833,15 @@ public static class SafetyGuard
 
     public static ZoneProcessInfo GetZoneProcesses(ZoneId zone) => GetAllZoneProcesses()[zone];
 
-    public static SweepStats SweepFiles(string rootPath, int minAgeDays, bool doApply, bool pruneEmptySubdirs)
+    public static SweepStats SweepFiles(string rootPath, int minAgeDays, bool doApply, bool pruneEmptySubdirs, CancellationToken ct = default, Func<bool>? shouldAbort = null)
     {
         var st = new SweepStats();
+        ct.ThrowIfCancellationRequested();
+        if (shouldAbort?.Invoke() == true)
+        {
+            st.AbortedByCallback = true;
+            return st;
+        }
         if (!TryNormalizePath(rootPath, out var rootKey) || !Directory.Exists(rootPath))
             return st;
         if (IsProtectedForTraversal(rootPath))
@@ -562,9 +859,16 @@ public static class SafetyGuard
         var stack = new Stack<string>();
         var visitedSubdirs = new List<string>();
         stack.Push(rootPath);
+        int processedSinceAbortCheck = 0;
 
         while (stack.Count > 0)
         {
+            ct.ThrowIfCancellationRequested();
+            if (shouldAbort?.Invoke() == true)
+            {
+                st.AbortedByCallback = true;
+                return st;
+            }
             var curr = stack.Pop();
             DirectoryInfo di;
             try { di = new DirectoryInfo(curr); } catch { continue; }
@@ -580,6 +884,16 @@ public static class SafetyGuard
             {
                 foreach (var f in di.EnumerateFiles())
                 {
+                    ct.ThrowIfCancellationRequested();
+                    if (shouldAbort != null && (++processedSinceAbortCheck >= 32 || doApply))
+                    {
+                        processedSinceAbortCheck = 0;
+                        if (shouldAbort())
+                        {
+                            st.AbortedByCallback = true;
+                            return st;
+                        }
+                    }
                     try
                     {
                         if (IsReparsePoint(f)) { st.SkippedJunctions++; continue; }
@@ -599,8 +913,8 @@ public static class SafetyGuard
                         {
                             try
                             {
-                                // Re-verify ancestor chain + live attributes immediately before permanent unlink
-                                if (HasReparsePointInChain(f.FullName, rootKey) ||
+                                // Re-verify FULL ancestor chain up to drive root + live attributes immediately before unlink
+                                if (HasReparsePointInChain(f.FullName) ||
                                     !TryGetAttributes(f.FullName, out var liveAttrs) ||
                                     (liveAttrs & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0)
                                 {
@@ -620,34 +934,46 @@ public static class SafetyGuard
                             }
                         }
                     }
+                    catch (UnauthorizedAccessException) { st.AccessDeniedCount++; }
                     catch { }
                 }
             }
+            catch (OperationCanceledException) { throw; }
+            catch (UnauthorizedAccessException) { st.AccessDeniedCount++; }
             catch { }
 
             try
             {
                 foreach (var sub in di.EnumerateDirectories())
                 {
+                    ct.ThrowIfCancellationRequested();
                     try
                     {
                         if (IsReparsePoint(sub)) { st.SkippedJunctions++; continue; }
                         if (IsProtectedForTraversal(sub.FullName)) { st.SkippedProtected++; continue; }
                         stack.Push(sub.FullName);
                     }
+                    catch (UnauthorizedAccessException) { st.AccessDeniedCount++; }
                     catch { }
                 }
             }
+            catch (OperationCanceledException) { throw; }
+            catch (UnauthorizedAccessException) { st.AccessDeniedCount++; }
             catch { }
         }
 
-        if (doApply && pruneEmptySubdirs && visitedSubdirs.Count > 0)
+        if (doApply && pruneEmptySubdirs && visitedSubdirs.Count > 0 && !st.AbortedByCallback)
         {
             foreach (var d in visitedSubdirs.OrderByDescending(x => x.Length))
             {
+                if (shouldAbort?.Invoke() == true)
+                {
+                    st.AbortedByCallback = true;
+                    break;
+                }
                 try
                 {
-                    if (IsProtectedForDelete(d) || HasReparsePointInChain(d, rootKey)) continue;
+                    if (IsProtectedForDelete(d) || HasReparsePointInChain(d)) continue;
                     var di = new DirectoryInfo(d);
                     if (minAgeDays > 0 && di.LastWriteTimeUtc > cutoffUtc) continue;
                     if (!di.EnumerateFileSystemInfos().Any())
@@ -822,39 +1148,8 @@ public static class SafetyGuard
         return (sum, ordered.Take(maxItems).ToList());
     }
 
-    /// <summary>BitBroom/Mole-style CLI read-only dry-run report across all 3 zones.</summary>
-    public static string BuildCliDryRunReport()
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine($"=== AI 清理助手 CLI Dry-Run 体检报告 ({DateTime.Now:yyyy-MM-dd HH:mm:ss}) ===");
-        var (rbBytes, rbItems) = GetRecycleBinStats();
-        sb.AppendLine($"Windows 回收站当前占用: {(rbBytes >= 0 ? $"{CleanCandidate.FormatBytes(rbBytes)} ({rbItems} 项)" : "不可用")}");
-        sb.AppendLine();
-
-        var procs = GetAllZoneProcesses();
-        var zones = new[] { ZoneId.Antigravity, ZoneId.GptCodex, ZoneId.DeepSeekHarness };
-        var reports = new ConcurrentDictionary<ZoneId, ZoneScanReport>();
-        Parallel.ForEach(zones, z => reports[z] = ZoneScanner.ScanZone(z, procs[z]));
-
-        long grandSafe = 0, grandRecycle = 0, grandOffline = 0;
-        foreach (var z in zones)
-        {
-            var r = reports[z];
-            grandSafe += r.SafeOnlineBytes;
-            grandRecycle += r.RecycleCandidateBytes;
-            grandOffline += r.OfflineCacheBytes;
-            string procState = r.ProcessInfo.IsRunning ? $"运行中 ({r.ProcessInfo.RunningPids.Count} 进程)" : "已退出";
-            sb.AppendLine($"[{z}] 状态: {procState} | 在线安全: {CleanCandidate.FormatBytes(r.SafeOnlineBytes)} | 回收站候选: {CleanCandidate.FormatBytes(r.RecycleCandidateBytes)} | 离线缓存: {CleanCandidate.FormatBytes(r.OfflineCacheBytes)}");
-            foreach (var c in r.Candidates.Where(x => x.Tier != CleanTier.ProtectedSkipped).Take(12))
-            {
-                sb.AppendLine($"  - [{c.TierBadge}] {c.SizeText,10} | {c.Title} | {c.Path}");
-            }
-            sb.AppendLine();
-        }
-        sb.AppendLine($"汇总: 在线安全可清 {CleanCandidate.FormatBytes(grandSafe)} | 回收站候选 {CleanCandidate.FormatBytes(grandRecycle)} | 离线缓存 {CleanCandidate.FormatBytes(grandOffline)}");
-        sb.AppendLine("DRY_RUN_STATUS=OK (只读体检，未改动任何文件)");
-        return sb.ToString();
-    }
+    /// <summary>BitBroom/Mole-style CLI read-only dry-run report across all registered zones.</summary>
+    public static string BuildCliDryRunReport() => CliRunner.ExecuteDryRunInternal(asJson: false, singleZone: null).Content;
 
     public static CleanItemOutcome ExecuteCandidate(CleanCandidate item)
     {
@@ -868,10 +1163,22 @@ public static class SafetyGuard
         try
         {
             // Dual-path live validation right before any physical mutation (BitBroom pattern)
+            if (ZoneCatalog.Get(item.Zone).IsReadOnlyZone || item.IsReadOnlyDiagnostic)
+            {
+                outcome.Blocked = true;
+                outcome.Message = "只读诊断专区/项目，严禁执行任何删除操作";
+                return outcome;
+            }
             if (item.Tier == CleanTier.ProtectedSkipped || !item.CanSelect || item.ActionType == CleanActionType.None)
             {
                 outcome.Blocked = true;
                 outcome.Message = "受保护项，禁止清理";
+                return outcome;
+            }
+            if (!IsAuthorizedExecutionTarget(item, out var authErr))
+            {
+                outcome.Blocked = true;
+                outcome.Message = authErr;
                 return outcome;
             }
 
@@ -912,7 +1219,7 @@ public static class SafetyGuard
 
             if (item.ActionType == CleanActionType.OfflineSweepFilesKeepSkeleton)
             {
-                // Re-verify process state LIVE right before touching any offline cache!
+                // Re-verify process state LIVE before AND periodically during offline cache sweeping!
                 var procInfo = GetZoneProcesses(item.Zone);
                 if (procInfo.IsRunning)
                 {
@@ -920,13 +1227,31 @@ public static class SafetyGuard
                     outcome.Message = $"已拦截：{string.Join("/", procInfo.RunningProcesses)} 仍在运行（{procInfo.RunningPids.Count} 个进程），请先正常退出";
                     return outcome;
                 }
-                var sw = SweepFiles(item.Path, item.MinAgeDays, doApply: true, pruneEmptySubdirs: false);
-                outcome.Succeeded = true;
+                var procWatch = Stopwatch.StartNew();
+                long lastProcCheckMs = 0;
+                bool restartedMidSweep = false;
+                Func<bool> abortIfRestarted = () =>
+                {
+                    long nowMs = procWatch.ElapsedMilliseconds;
+                    if (nowMs - lastProcCheckMs < 400) return false;
+                    lastProcCheckMs = nowMs;
+                    if (GetZoneProcesses(item.Zone).IsRunning)
+                    {
+                        restartedMidSweep = true;
+                        return true;
+                    }
+                    return false;
+                };
+                var sw = SweepFiles(item.Path, item.MinAgeDays, doApply: true, pruneEmptySubdirs: false, shouldAbort: abortIfRestarted);
+                outcome.Succeeded = !restartedMidSweep || sw.DeletedFiles > 0;
+                outcome.Blocked = restartedMidSweep;
                 outcome.FreedBytes = sw.DeletedBytes;
                 outcome.CleanedFiles = sw.DeletedFiles;
                 outcome.SkippedLocked = sw.SkippedLocked;
                 outcome.SkippedJunctions = sw.SkippedJunctions;
-                outcome.Message = $"已清理 {sw.DeletedFiles} 文件 ({CleanCandidate.FormatBytes(sw.DeletedBytes)})，保留目录骨架";
+                outcome.Message = restartedMidSweep
+                    ? $"检测到应用重新启动，已立即中止剩余清理（此前已清 {sw.DeletedFiles} 文件 / {CleanCandidate.FormatBytes(sw.DeletedBytes)}）"
+                    : $"已清理 {sw.DeletedFiles} 文件 ({CleanCandidate.FormatBytes(sw.DeletedBytes)})，保留目录骨架";
                 return outcome;
             }
 
@@ -1168,7 +1493,7 @@ public static class SafetyGuard
         Assert("format_bytes_gb_precision", CleanCandidate.FormatBytes(1_600_000_000L) == "1.49 GB");
         Assert("format_bytes_kb_precision", CleanCandidate.FormatBytes(1536L) == "1.5 KB");
 
-        // 1. Redline checks across all 3 zones (100% portable standard paths + custom config)
+        // 1. Redline checks across all 5 zones + global defense-in-depth redlines
         Assert("redline_antigravity_conversations", IsProtectedPath(Path.Combine(UserHome, @".gemini\antigravity\conversations\demo.pb")));
         Assert("redline_antigravity_network", IsProtectedPath(Path.Combine(Roaming, @"Antigravity\Network\Cookies")));
         Assert("redline_antigravity_partition_network", IsProtectedPath(Path.Combine(Roaming, @"Antigravity\Partitions\hub-browser-demo\Network\Cookies")));
@@ -1179,6 +1504,15 @@ public static class SafetyGuard
         Assert("redline_dsh_credentials", IsProtectedPath(Path.Combine(UserHome, @".dsh\.credentials.yaml")));
         Assert("redline_dsh_skills", IsProtectedPath(Path.Combine(UserHome, @".dsh\skills\superagent")));
         Assert("redline_dsh_desktop_network", IsProtectedPath(Path.Combine(Roaming, @"@deepseek-ai\dsh-desktop\Network\Cookies")));
+        Assert("redline_claude_file_history", IsProtectedPath(Path.Combine(UserHome, @".claude\file-history\rev1")));
+        Assert("redline_claude_shell_snapshots", IsProtectedPath(Path.Combine(UserHome, @".claude\shell-snapshots\snap.sh")));
+        Assert("redline_claude_json", IsProtectedPath(Path.Combine(UserHome, @".claude.json")));
+        Assert("redline_pnpm_store", IsProtectedPath(Path.Combine(LocalApp, @"pnpm\store\v10\files")));
+        Assert("redline_playwright_browsers", IsProtectedPath(Path.Combine(LocalApp, @"ms-playwright\chromium-1140")));
+        Assert("redline_huggingface_hub", IsProtectedPath(Path.Combine(UserHome, @".cache\huggingface\hub\models--demo")));
+        Assert("redline_ollama_models", IsProtectedPath(Path.Combine(UserHome, @".ollama\models\blobs")));
+        Assert("redline_user_documents", IsProtectedPath(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)));
+        Assert("redline_user_ssh", IsProtectedPath(Path.Combine(UserHome, @".ssh\id_ed25519")));
         Assert("redline_service_worker_database", IsProtectedPath(Path.Combine(Roaming, @"Antigravity\Service Worker\Database\000001.ldb")));
         Assert("service_worker_cachestorage_allowed", !IsProtectedPath(Path.Combine(Roaming, @"Antigravity\Service Worker\CacheStorage\demo")));
         Assert("redline_uv_cache_root_self_protected", IsProtectedPath(Path.Combine(LocalApp, @"uv\cache")));
@@ -1186,9 +1520,13 @@ public static class SafetyGuard
         var rbStat = GetRecycleBinStats();
         Assert("recycle_bin_query_non_negative", rbStat.TotalBytes >= 0 && rbStat.ItemCount >= 0);
 
-        // 2. Live process detection & offline safety contract
+        // 2. Live process detection & ZoneCatalog contract
         var allProcs = GetAllZoneProcesses();
-        Assert("process_snapshot_has_all_zones", allProcs.Count == 3);
+        Assert("process_snapshot_has_all_zones", allProcs.Count == ZoneCatalog.All.Count && ZoneCatalog.All.Count == 5);
+        Assert("zone_slug_roundtrip",
+            ZoneCatalog.TryParseSlug("claude-code", out var parsedCc) && parsedCc == ZoneId.ClaudeCode &&
+            ZoneCatalog.TryParseSlug("ai-toolchains", out var parsedTc) && parsedTc == ZoneId.AiToolchains &&
+            !ZoneCatalog.TryParseSlug("nonexistent-zone", out _));
 
         // If Antigravity or GPT is currently running on this host, offline clean MUST block!
         if (allProcs[ZoneId.GptCodex].IsRunning)
@@ -1365,6 +1703,195 @@ public static class SafetyGuard
                 firedProps.Contains(nameof(CleanCandidate.TierBadge)) &&
                 firedProps.Contains(nameof(CleanCandidate.Reason)) &&
                 firedProps.Contains(nameof(CleanCandidate.VerdictImpactText)));
+
+            // 6. v3.0 Claude Code strict read-only fixture (file-history + unknown dir + real NTFS junction -> 0 deletions, 0 traversal!)
+            string claudeMock = Path.Combine(sandbox, "mock_claude");
+            string claudeHist = Path.Combine(claudeMock, "file-history");
+            string claudeUnk = Path.Combine(claudeMock, "custom-unknown");
+            string claudeJunc = Path.Combine(claudeMock, "linked_ext");
+            Directory.CreateDirectory(claudeHist);
+            Directory.CreateDirectory(claudeUnk);
+            string histFile = Path.Combine(claudeHist, "old_rev.bak");
+            string unkFile = Path.Combine(claudeUnk, "notes.txt");
+            File.WriteAllText(histFile, "KEEP-HISTORY");
+            File.WriteAllText(unkFile, "KEEP-UNKNOWN");
+            File.SetLastWriteTimeUtc(histFile, DateTime.UtcNow.AddDays(-60));
+            using (var mk2 = Process.Start(new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{claudeJunc}\" \"{sentinelDir}\"")
+            { CreateNoWindow = true, UseShellExecute = false }))
+            {
+                mk2?.WaitForExit(5000);
+            }
+            try
+            {
+                var claudeRep = ZoneScanner.ScanClaudeDirectory(claudeMock, new ZoneProcessInfo { Zone = ZoneId.ClaudeCode });
+                Assert("claude_fixture_zero_deletable_candidates",
+                    claudeRep.Candidates.Count >= 3 &&
+                    claudeRep.Candidates.All(c => !c.CanSelect && c.ActionType == CleanActionType.None && c.IsReadOnlyDiagnostic) &&
+                    claudeRep.SafeOnlineBytes == 0 && claudeRep.RecycleCandidateBytes == 0);
+                var juncCand = claudeRep.Candidates.FirstOrDefault(c => c.Path.Equals(claudeJunc, StringComparison.OrdinalIgnoreCase));
+                Assert("claude_fixture_junction_not_traversed",
+                    juncCand != null && juncCand.JunctionCount == 1 && juncCand.SizeBytes == 0 &&
+                    File.Exists(histFile) && File.Exists(unkFile) && File.Exists(sentinelFile));
+
+                // Even if forced, ExecuteCandidate MUST block any ReadOnlyZone or IsReadOnlyDiagnostic candidate!
+                var forcedClaude = new CleanCandidate
+                {
+                    Zone = ZoneId.ClaudeCode,
+                    Tier = CleanTier.SafeOnline,
+                    ActionType = CleanActionType.SweepExpiredFiles,
+                    Path = claudeHist,
+                    CanSelect = true
+                };
+                var claudeExec = ExecuteCandidate(forcedClaude);
+                Assert("claude_readonly_zone_execute_blocked", claudeExec.Blocked && !claudeExec.Succeeded && File.Exists(histFile));
+
+                var forcedRadar = new CleanCandidate
+                {
+                    Zone = ZoneId.AiToolchains,
+                    Tier = CleanTier.ProtectedSkipped,
+                    ActionType = CleanActionType.RecycleDirectoryOrFile,
+                    IsReadOnlyDiagnostic = true,
+                    Path = Path.Combine(LocalApp, @"pnpm\store"),
+                    CanSelect = true
+                };
+                var radarExec = ExecuteCandidate(forcedRadar);
+                Assert("readonly_diagnostic_candidate_execute_blocked", radarExec.Blocked && !radarExec.Succeeded && !forcedRadar.CanSelect);
+
+                // Cancelled ZoneScanner reports ScanStatus.Cancelled (never silently Status.Ok with 0 items!)
+                using var cancelledCts = new CancellationTokenSource();
+                cancelledCts.Cancel();
+                var cancelledRep = ZoneScanner.ScanZone(ZoneId.ClaudeCode, null, cancelledCts.Token);
+                Assert("cancelled_scan_reports_cancelled_status", cancelledRep.Status == ScanStatus.Cancelled);
+
+                // CLI JSON contract check (in-process on lightweight claude-code zone -> schemaVersion=1.0, valid JSON)
+                var (cliCode, cliJson) = CliRunner.ExecuteDryRunInternal(asJson: true, singleZone: ZoneId.ClaudeCode);
+                using var doc = JsonDocument.Parse(cliJson);
+                Assert("cli_dryrun_json_schema_valid",
+                    cliCode == 0 &&
+                    doc.RootElement.GetProperty("schemaVersion").GetString() == CliRunner.SchemaVersion &&
+                    doc.RootElement.GetProperty("readOnly").GetBoolean() &&
+                    doc.RootElement.GetProperty("zones").GetArrayLength() == 1);
+
+                // 7. v3.0 Red-Team P0/P1 Hardening Regression Suite
+                // 7A. Executor authorization gate: bypassing scanner with an unauthorized temp folder MUST block with 0 deletions!
+                string unauthDir = Path.Combine(sandbox, "unauth_target");
+                Directory.CreateDirectory(unauthDir);
+                string unauthFile = Path.Combine(unauthDir, "must_survive.tmp");
+                File.WriteAllText(unauthFile, "DO-NOT-DELETE");
+                File.SetLastWriteTimeUtc(unauthFile, DateTime.UtcNow.AddDays(-30));
+
+                var forgedToolchainCand = new CleanCandidate
+                {
+                    Zone = ZoneId.AiToolchains,
+                    Tier = CleanTier.SafeOnline,
+                    ActionType = CleanActionType.SweepExpiredFiles,
+                    Path = unauthDir,
+                    MinAgeDays = 1,
+                    CanSelect = true
+                };
+                var forgedToolchainOut = ExecuteCandidate(forgedToolchainCand);
+                Assert("p0_executor_blocks_unauthorized_ai_toolchains_dir",
+                    forgedToolchainOut.Blocked && !forgedToolchainOut.Succeeded && File.Exists(unauthFile));
+
+                var forgedAgRecycle = new CleanCandidate
+                {
+                    Zone = ZoneId.Antigravity,
+                    Tier = CleanTier.RecycleCandidate,
+                    ActionType = CleanActionType.RecycleDirectoryOrFile,
+                    Path = unauthDir,
+                    CanSelect = true
+                };
+                var forgedAgOut = ExecuteCandidate(forgedAgRecycle);
+                Assert("p0_executor_blocks_unauthorized_antigravity_recycle",
+                    forgedAgOut.Blocked && !forgedAgOut.Succeeded && File.Exists(unauthFile));
+
+                var crossZoneCand = new CleanCandidate
+                {
+                    Zone = ZoneId.GptCodex,
+                    Tier = CleanTier.SafeOnline,
+                    ActionType = CleanActionType.SweepExpiredFiles,
+                    Path = Path.Combine(UserHome, @".gemini\antigravity\cache"),
+                    CanSelect = true
+                };
+                var crossZoneOut = ExecuteCandidate(crossZoneCand);
+                Assert("p0_executor_blocks_cross_zone_path_mismatch", crossZoneOut.Blocked && !crossZoneOut.Succeeded);
+
+                // 7B. ValidateCustomRootPath rejects drive roots, OS dirs, user home, redlines, and junctions
+                Assert("p1_validate_custom_root_rejects_dangerous_paths",
+                    !ValidateCustomRootPath(@"C:\", out _) &&
+                    !ValidateCustomRootPath(Environment.GetFolderPath(Environment.SpecialFolder.Windows), out _) &&
+                    !ValidateCustomRootPath(UserHome, out _) &&
+                    !ValidateCustomRootPath(LocalApp, out _) &&
+                    !ValidateCustomRootPath(Path.Combine(UserHome, ".claude"), out _) &&
+                    !ValidateCustomRootPath(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), out _) &&
+                    !ValidateCustomRootPath(juncPath, out _) &&
+                    ValidateCustomRootPath(unauthDir, out _));
+
+                // 7C. SweepFiles shouldAbort callback stops remaining deletions mid-sweep
+                string abortDir = Path.Combine(sandbox, "abort_sweep");
+                Directory.CreateDirectory(abortDir);
+                string ab1 = Path.Combine(abortDir, "a.tmp");
+                string ab2 = Path.Combine(abortDir, "b.tmp");
+                File.WriteAllText(ab1, "1");
+                File.WriteAllText(ab2, "2");
+                File.SetLastWriteTimeUtc(ab1, DateTime.UtcNow.AddDays(-20));
+                File.SetLastWriteTimeUtc(ab2, DateTime.UtcNow.AddDays(-20));
+                int abortCalls = 0;
+                var abSw = SweepFiles(abortDir, minAgeDays: 1, doApply: true, pruneEmptySubdirs: false,
+                    shouldAbort: () => ++abortCalls >= 4); // allows initial entry + 1 file, then aborts before 2nd file
+                Assert("p1_sweep_abort_callback_stops_remaining_deletes",
+                    abSw.AbortedByCallback && abSw.DeletedFiles <= 1 && (File.Exists(ab1) || File.Exists(ab2)));
+
+                // 7D. Claude scanner ancestor-chain junction guard produces explicit 0B diagnostic skip instead of traversing
+                var ancestorJuncRep = ZoneScanner.ScanClaudeDirectory(claudeJunc, new ZoneProcessInfo { Zone = ZoneId.ClaudeCode });
+                Assert("p1_claude_ancestor_junction_blocked",
+                    ancestorJuncRep.Candidates.Count == 1 &&
+                    ancestorJuncRep.Candidates[0].IsReadOnlyDiagnostic &&
+                    ancestorJuncRep.Candidates[0].JunctionCount == 1 &&
+                    ancestorJuncRep.Candidates[0].SizeBytes == 0);
+
+                // 7E. CLI mixed-status priority contract: error > cancelled > partial > ok
+                var stErrCan = CliRunner.ComputeOverallStatus(new[]
+                {
+                    new ZoneScanReport { Status = ScanStatus.Cancelled },
+                    new ZoneScanReport { Status = ScanStatus.Error }
+                });
+                var stCanPar = CliRunner.ComputeOverallStatus(new[]
+                {
+                    new ZoneScanReport { Status = ScanStatus.Partial },
+                    new ZoneScanReport { Status = ScanStatus.Cancelled }
+                });
+                var stParOk = CliRunner.ComputeOverallStatus(new[]
+                {
+                    new ZoneScanReport { Status = ScanStatus.Ok },
+                    new ZoneScanReport { Status = ScanStatus.Partial }
+                });
+                var stOk = CliRunner.ComputeOverallStatus(new[] { new ZoneScanReport { Status = ScanStatus.Ok } });
+                Assert("p1_cli_mixed_status_priority_error_over_cancelled",
+                    stErrCan == ("error", 3) &&
+                    stCanPar == ("cancelled", 3) &&
+                    stParOk == ("partial", 3) &&
+                    stOk == ("ok", 0));
+
+                // 7F. CLI cancellation propagates through ExecuteDryRunInternal -> exit code 3 + status="cancelled"
+                var (canCode, canJson) = CliRunner.ExecuteDryRunInternal(asJson: true, singleZone: ZoneId.ClaudeCode, ct: cancelledCts.Token);
+                using var canDoc = JsonDocument.Parse(canJson);
+                Assert("p1_cli_cancelled_token_returns_exit3",
+                    canCode == 3 && canDoc.RootElement.GetProperty("status").GetString() == "cancelled");
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(claudeJunc))
+                    {
+                        using var rm2 = Process.Start(new ProcessStartInfo("cmd.exe", $"/c rmdir \"{claudeJunc}\"")
+                        { CreateNoWindow = true, UseShellExecute = false });
+                        rm2?.WaitForExit(5000);
+                    }
+                }
+                catch { }
+            }
         }
         finally
         {
