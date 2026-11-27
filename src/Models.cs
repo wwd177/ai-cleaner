@@ -119,8 +119,15 @@ public sealed class CleanCandidate : INotifyPropertyChanged
         CanSelect = !isRunning;
         if (isRunning) IsSelected = false;
         Reason = isRunning
-            ? "当前应用正在运行，已自动加锁；请正常退出应用后刷新再清理"
-            : "应用已退出，离线缓存已解锁，可安全清理（保留目录骨架与登录态）";
+            ? (Loc.IsEnglish ? "Locked while app is running; exit the app cleanly to unlock." : "当前应用正在运行，已自动加锁；请正常退出应用后刷新再清理")
+            : (Loc.IsEnglish ? "App exited — offline cache unlocked (preserves folder skeleton & login state)." : "应用已退出，离线缓存已解锁，可安全清理（保留目录骨架与登录态）");
+    }
+
+    public void NotifyLocalizationChanged()
+    {
+        OnPropertyChanged(nameof(TierBadge));
+        OnPropertyChanged(nameof(SizeText));
+        OnPropertyChanged(nameof(VerdictImpactText));
     }
 
     public bool IsSelected
@@ -150,7 +157,9 @@ public sealed class CleanCandidate : INotifyPropertyChanged
         }
     }
 
-    public string SizeText => (Tier == CleanTier.ProtectedSkipped && SizeBytes == 0 && !IsReadOnlyDiagnostic) ? "受保护" : FormatBytes(SizeBytes);
+    public string SizeText => (Tier == CleanTier.ProtectedSkipped && SizeBytes == 0 && !IsReadOnlyDiagnostic)
+        ? (Loc.IsEnglish ? "Protected" : "受保护")
+        : FormatBytes(SizeBytes);
     public string LastWriteText => NewestWriteLocal == DateTime.MinValue ? "-" : NewestWriteLocal.ToString("yyyy-MM-dd HH:mm");
 
     // Kleaner-style Plain-English Impact Verdict shown in the bottom Inspector Strip
@@ -158,10 +167,29 @@ public sealed class CleanCandidate : INotifyPropertyChanged
     {
         get
         {
+            if (Loc.IsEnglish)
+            {
+                if (IsUserWhitelisted)
+                    return "User Whitelisted: skipped permanently during scans and cleanup. Right-click or open Rules to remove.";
+                if (IsReadOnlyDiagnostic)
+                    return "Read-Only Radar (Never Auto-Deleted): protects edit rollback snapshots, hardlink stores, pinned browsers, VHDX disks, or local models.";
+                return Tier switch
+                {
+                    CleanTier.SafeOnline => ActionType == CleanActionType.RecycleExpiredChildren || ActionType == CleanActionType.RecycleBatchDirectories
+                        ? "Safe Online · Reversible: moved to Windows Recycle Bin without affecting running AI apps."
+                        : "Safe Online · Auto-Rebuilt: sweeps only expired unlocked cache files; apps rebuild automatically.",
+                    CleanTier.RecycleCandidate => "Recycle Bin Slimming · Reversible: unchecked by default; moves safely to Windows Recycle Bin.",
+                    CleanTier.OfflineCache => CanSelect
+                        ? "Offline Cache · Unlocked: target app has exited; clears browser/shader cache while preserving auth & folder skeleton."
+                        : "Locked While Running: target app is active; exit cleanly and refocus AI Cleaner to auto-unlock.",
+                    CleanTier.ProtectedSkipped => "Hard Redline Protected: holds core conversations, credentials, runtimes, or NTFS junctions — permanently blocked.",
+                    _ => Reason
+                };
+            }
             if (IsUserWhitelisted)
                 return "已加入用户永久白名单：扫描与清理均会自动跳过，如需取消可在右键或「规则/白名单」中移出。";
             if (IsReadOnlyDiagnostic)
-                return "只读诊断雷达 · 绝不自动删除：此项涉及用户历史回滚、硬链接存储、锁定版本浏览器或断点续传模型，仅展示体积供「空间雷达」查看。";
+                return "只读诊断雷达 · 绝不自动删除：此项涉及用户历史回滚、硬链接存储、锁定版本浏览器、虚拟盘或断点续传模型，仅展示体积供「空间雷达」查看。";
             return Tier switch
             {
                 CleanTier.SafeOnline => ActionType == CleanActionType.RecycleExpiredChildren || ActionType == CleanActionType.RecycleBatchDirectories
@@ -181,6 +209,19 @@ public sealed class CleanCandidate : INotifyPropertyChanged
     {
         get
         {
+            if (Loc.IsEnglish)
+            {
+                if (IsUserWhitelisted) return "Whitelist";
+                if (IsReadOnlyDiagnostic) return "Read-Only Radar";
+                return Tier switch
+                {
+                    CleanTier.SafeOnline => "Green · Safe",
+                    CleanTier.RecycleCandidate => IsRecommended ? "Yellow · Reco" : "Yellow · Recycle",
+                    CleanTier.OfflineCache => CanSelect ? "Blue · Offline" : "Locked · Running",
+                    CleanTier.ProtectedSkipped => "Red · Protected",
+                    _ => ""
+                };
+            }
             if (IsUserWhitelisted) return "白名单 · 保留";
             if (IsReadOnlyDiagnostic) return "只读 · 诊断雷达";
             return Tier switch
@@ -286,6 +327,8 @@ public sealed class ZoneScanReport
     public long RecycleCandidateBytes => Candidates.Where(c => c.Tier == CleanTier.RecycleCandidate && c.CanSelect && !c.IsReadOnlyDiagnostic).Sum(c => c.SizeBytes);
     public long RecommendedBytes => Candidates.Where(c => c.IsRecommended && c.CanSelect && !c.IsReadOnlyDiagnostic).Sum(c => c.SizeBytes);
     public long OfflineCacheBytes => Candidates.Where(c => c.Tier == CleanTier.OfflineCache && !c.IsReadOnlyDiagnostic).Sum(c => c.SizeBytes);
+    /// <summary>Unlocked offline cache bytes currently selectable (accurately handles per-IDE locking in AiIdes).</summary>
+    public long CleanableOfflineCacheBytes => Candidates.Where(c => c.Tier == CleanTier.OfflineCache && c.CanSelect && !c.IsReadOnlyDiagnostic).Sum(c => c.SizeBytes);
     public long DiagnosticBytes => Candidates.Where(c => c.IsReadOnlyDiagnostic).Sum(c => c.SizeBytes);
     public long ProtectedBytes => Candidates.Where(c => c.Tier == CleanTier.ProtectedSkipped).Sum(c => c.SizeBytes);
 }

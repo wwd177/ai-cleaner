@@ -258,10 +258,22 @@ public partial class MainWindow : Window
         }
         ExpUninstalledZones.Header = $"{Loc.T("UninstalledGroup")} ({_inactiveSidebarZones.Count})";
         foreach (var item in _sidebarByZone.Values) item.NotifyLocalizationChanged();
+        foreach (var rep in _reports.Values)
+        {
+            foreach (var c in rep.Candidates) c.NotifyLocalizationChanged();
+            UpdateSidebarZoneSummary(rep);
+            UpdateSingleSideProc(rep.Zone, rep.ProcessInfo);
+        }
+        foreach (var (z, p) in _procCache)
+            UpdateSingleSideProc(z, p);
         _trayService?.RefreshMenuLocalization();
+        RefreshDiskSpace();
+        RefreshCumulativeFreed();
+        _ = RefreshRecycleBinAsync();
         UpdateZoneChrome();
         UpdateGlobalSafeCleanButton();
         RefreshPolicyButtonLabel();
+        UpdateCleanButtonState();
     }
 
     protected override void OnClosing(CancelEventArgs e)
@@ -399,8 +411,8 @@ public partial class MainWindow : Window
         }
         BtnQuickCleanAllSafe.IsEnabled = !anyBusy && totalItems > 0;
         TxtQuickCleanAllSafe.Text = totalItems > 0
-            ? $"一键清全区绿区 ({CleanCandidate.FormatBytes(totalSafe)})"
-            : "全区绿区已洁净";
+            ? (Loc.IsEnglish ? $"Clean All Green ({CleanCandidate.FormatBytes(totalSafe)})" : $"一键清全区绿区 ({CleanCandidate.FormatBytes(totalSafe)})")
+            : Loc.T("BtnQuickSafeCleanDone");
     }
 
     private async Task RefreshRecycleBinAsync()
@@ -410,17 +422,19 @@ public partial class MainWindow : Window
             var (bytes, items) = await Task.Run(SafetyGuard.GetRecycleBinStats);
             if (bytes < 0)
             {
-                TxtRecycleBinSize.Text = "不可用";
+                TxtRecycleBinSize.Text = Loc.IsEnglish ? "N/A" : "不可用";
                 return;
             }
             if (bytes > 0 || items > 0)
             {
-                TxtRecycleBinSize.Text = $"{CleanCandidate.FormatBytes(bytes)} · {items} 项";
+                TxtRecycleBinSize.Text = Loc.IsEnglish
+                    ? $"{CleanCandidate.FormatBytes(bytes)} · {items} items"
+                    : $"{CleanCandidate.FormatBytes(bytes)} · {items} 项";
                 TxtRecycleBinSize.Foreground = bytes >= 5L * 1024 * 1024 * 1024 ? BrAmberText : BrCyanText;
             }
             else
             {
-                TxtRecycleBinSize.Text = "空 (0 B)";
+                TxtRecycleBinSize.Text = Loc.IsEnglish ? "Empty (0 B)" : "空 (0 B)";
                 TxtRecycleBinSize.Foreground = BrGreenText;
             }
         }
@@ -433,7 +447,9 @@ public partial class MainWindow : Window
         {
             var audits = SafetyGuard.LoadHistoryAudits();
             long total = audits.Sum(a => a.TotalFreedBytes);
-            TxtTotalFreed.Text = $"累计释放 {CleanCandidate.FormatBytes(total)}";
+            TxtTotalFreed.Text = Loc.IsEnglish
+                ? $"Freed {CleanCandidate.FormatBytes(total)}"
+                : $"累计释放 {CleanCandidate.FormatBytes(total)}";
         }
         catch { }
     }
@@ -441,7 +457,9 @@ public partial class MainWindow : Window
     private void RefreshPolicyButtonLabel()
     {
         var s = SettingsStore.Load();
-        BtnPolicyQuick.Content = $"阈值: {s.TempMinAgeDays}天/{s.WorkspaceMinSizeMB}M";
+        BtnPolicyQuick.Content = Loc.IsEnglish
+            ? $"Policy: {s.TempMinAgeDays}d/{s.WorkspaceMinSizeMB}M"
+            : $"阈值: {s.TempMinAgeDays}天/{s.WorkspaceMinSizeMB}M";
     }
 
     private void RefreshDiskSpace()
@@ -455,7 +473,9 @@ public partial class MainWindow : Window
                 double totalGb = c.TotalSize / (1024.0 * 1024 * 1024);
                 double usedPct = (1.0 - freeGb / totalGb) * 100.0;
                 bool low = freeGb < 30.0 || usedPct >= 88.0;
-                TxtDriveC.Text = low ? $"偏紧 · 余 {freeGb:F1} GB" : $"余 {freeGb:F1} GB";
+                TxtDriveC.Text = Loc.IsEnglish
+                    ? (low ? $"Low · {freeGb:F1} GB free" : $"{freeGb:F1} GB free")
+                    : (low ? $"偏紧 · 余 {freeGb:F1} GB" : $"余 {freeGb:F1} GB");
                 TxtDriveC.Foreground = low ? BrAmberText : (Brush)FindResource("InkSecondary");
                 BarDriveC.Value = Math.Clamp(usedPct, 0, 100);
                 BarDriveC.Foreground = low ? BrAmberBar : BrBlueBar;
@@ -470,12 +490,14 @@ public partial class MainWindow : Window
             {
                 PanelDrive2.Visibility = Visibility.Visible;
                 string letter = dataDrive.Name.TrimEnd('\\', ':');
-                TxtDrive2Label.Text = $"{letter} 盘 (数据/工作区)";
+                TxtDrive2Label.Text = Loc.IsEnglish ? $"Drive {letter} (Data)" : $"{letter} 盘 (数据/工作区)";
                 double freeGb = dataDrive.AvailableFreeSpace / (1024.0 * 1024 * 1024);
                 double totalGb = dataDrive.TotalSize / (1024.0 * 1024 * 1024);
                 double usedPct = (1.0 - freeGb / totalGb) * 100.0;
                 bool low = freeGb < 30.0 || usedPct >= 88.0;
-                TxtDriveF.Text = low ? $"偏紧 · 余 {freeGb:F1} GB" : $"余 {freeGb:F1} GB";
+                TxtDriveF.Text = Loc.IsEnglish
+                    ? (low ? $"Low · {freeGb:F1} GB free" : $"{freeGb:F1} GB free")
+                    : (low ? $"偏紧 · 余 {freeGb:F1} GB" : $"余 {freeGb:F1} GB");
                 TxtDriveF.Foreground = low ? BrAmberText : (Brush)FindResource("InkSecondary");
                 BarDriveF.Value = Math.Clamp(usedPct, 0, 100);
                 BarDriveF.Foreground = low ? BrAmberBar : BrCyanBar;
@@ -694,19 +716,22 @@ public partial class MainWindow : Window
     {
         if (!_sidebarByZone.TryGetValue(zone, out var item)) return;
         item.IsRunning = info.IsRunning;
+        bool en = Loc.IsEnglish;
         if (item.IsReadOnlyZone)
         {
             item.ProcText = info.IsRunning
-                ? $"运行中 ({info.RunningPids.Count} 进程) · 只读诊断"
-                : "已退出 · 只读安全诊断";
+                ? (en ? $"Running ({info.RunningPids.Count}) · Read-Only" : $"运行中 ({info.RunningPids.Count} 进程) · 只读诊断")
+                : (en ? "Stopped · Read-Only Radar" : "已退出 · 只读安全诊断");
         }
         else if (info.IsRunning)
         {
-            item.ProcText = $"运行中 ({info.RunningPids.Count} 进程) · 离线项已锁";
+            item.ProcText = en
+                ? $"Running ({info.RunningPids.Count}) · Offline Locked"
+                : $"运行中 ({info.RunningPids.Count} 进程) · 离线项已锁";
         }
         else
         {
-            item.ProcText = "已退出 · 可清离线缓存";
+            item.ProcText = en ? "Stopped · Offline Ready" : "已退出 · 可清离线缓存";
         }
     }
 
@@ -714,30 +739,39 @@ public partial class MainWindow : Window
     {
         if (!_sidebarByZone.TryGetValue(report.Zone, out var item)) return;
         item.IsDetected = report.IsDetected;
+        bool en = Loc.IsEnglish;
         if (report.Status == ScanStatus.Error)
         {
-            item.SummaryText = "扫描受限";
+            item.SummaryText = en ? "Scan Restricted" : "扫描受限";
             return;
         }
         if (item.IsReadOnlyZone)
         {
             item.SummaryText = report.DiagnosticBytes > 0
-                ? $"只读诊断 · 占用 {CleanCandidate.FormatBytes(report.DiagnosticBytes)}"
-                : (report.IsDetected ? "只读诊断 · 0 项大目录" : "未检测到安装目录");
+                ? (en ? $"Read-Only · {CleanCandidate.FormatBytes(report.DiagnosticBytes)}" : $"只读诊断 · 占用 {CleanCandidate.FormatBytes(report.DiagnosticBytes)}")
+                : (report.IsDetected ? (en ? "Read-Only · 0 large dirs" : "只读诊断 · 0 项大目录") : (en ? "Not detected" : "未检测到安装目录"));
             return;
         }
-        long totalCleanable = report.SafeOnlineBytes + report.RecycleCandidateBytes + (report.ProcessInfo.IsRunning ? 0 : report.OfflineCacheBytes);
+        // Uses CleanableOfflineCacheBytes so per-IDE locking in AiIdes counts exited IDEs accurately!
+        long totalCleanable = report.SafeOnlineBytes + report.RecycleCandidateBytes + report.CleanableOfflineCacheBytes;
         if (totalCleanable > 0)
-            item.SummaryText = $"可清理 {CleanCandidate.FormatBytes(totalCleanable)}（含回收站项）";
+            item.SummaryText = en
+                ? $"Reclaim {CleanCandidate.FormatBytes(totalCleanable)}"
+                : $"可清理 {CleanCandidate.FormatBytes(totalCleanable)}（含回收站项）";
         else if (report.DiagnosticBytes > 0)
-            item.SummaryText = $"只读雷达 {CleanCandidate.FormatBytes(report.DiagnosticBytes)} · 可清 0 B";
+            item.SummaryText = en
+                ? $"Radar {CleanCandidate.FormatBytes(report.DiagnosticBytes)} · 0 B clean"
+                : $"只读雷达 {CleanCandidate.FormatBytes(report.DiagnosticBytes)} · 可清 0 B";
         else
-            item.SummaryText = report.IsDetected ? "已洁净（可清理 0 B）" : "未检测到安装目录";
+            item.SummaryText = report.IsDetected
+                ? (en ? "Clean (0 B reclaimable)" : "已洁净（可清理 0 B）")
+                : (en ? "Not detected" : "未检测到安装目录");
     }
 
     private void ApplyHeaderProcessBadge()
     {
         var def = ZoneCatalog.Get(_currentZone);
+        bool en = Loc.IsEnglish;
         ZoneProcessInfo? proc = null;
         if (_reports.TryGetValue(_currentZone, out var rep))
             proc = rep.ProcessInfo;
@@ -750,8 +784,8 @@ public partial class MainWindow : Window
             BadgeProcStatus.BorderBrush = BrReadOnlyBorder;
             TxtProcBadge.Foreground = BrReadOnlyInk;
             TxtProcBadge.Text = proc is { IsRunning: true }
-                ? $"运行中 ({proc.RunningPids.Count} 进程) · 只读诊断模式（0 删除）"
-                : "只读诊断模式（绝不执行删除）";
+                ? (en ? $"Running ({proc.RunningPids.Count}) · Read-Only (0 Deletes)" : $"运行中 ({proc.RunningPids.Count} 进程) · 只读诊断模式（0 删除）")
+                : (en ? "Read-Only Mode (Zero Deletions)" : "只读诊断模式（绝不执行删除）");
             return;
         }
 
@@ -760,7 +794,7 @@ public partial class MainWindow : Window
             BadgeProcStatus.Background = BrDetectBg;
             BadgeProcStatus.BorderBrush = BrDetectBorder;
             TxtProcBadge.Foreground = BrDetectInk;
-            TxtProcBadge.Text = "检测进程中...";
+            TxtProcBadge.Text = en ? "Checking processes..." : "检测进程中...";
             return;
         }
 
@@ -769,14 +803,19 @@ public partial class MainWindow : Window
             BadgeProcStatus.Background = BrRunBg;
             BadgeProcStatus.BorderBrush = BrRunBorder;
             TxtProcBadge.Foreground = BrRunInk;
-            TxtProcBadge.Text = $"运行中 ({proc.RunningPids.Count} 进程) · 在线安全模式";
+            string procHint = _currentZone == ZoneId.AiIdes && proc.RunningProcesses.Count > 0
+                ? $" [{string.Join("/", proc.RunningProcesses)}]"
+                : "";
+            TxtProcBadge.Text = en
+                ? $"Running ({proc.RunningPids.Count}){procHint} · Safe Online Mode"
+                : $"运行中 ({proc.RunningPids.Count} 进程){procHint} · 在线安全模式";
         }
         else
         {
             BadgeProcStatus.Background = BrOffBg;
             BadgeProcStatus.BorderBrush = BrOffBorder;
             TxtProcBadge.Foreground = BrOffInk;
-            TxtProcBadge.Text = "已退出 · 在线/离线均可清理";
+            TxtProcBadge.Text = en ? "Stopped · Online & Offline Ready" : "已退出 · 在线/离线均可清理";
         }
     }
 
@@ -809,13 +848,13 @@ public partial class MainWindow : Window
 
         TxtKpiSafe.Text = CleanCandidate.FormatBytes(rep.SafeOnlineBytes);
         TxtKpiSafeSub.Text = def.IsReadOnlyZone
-            ? "只读诊断专区 · 0 删除候选"
-            : $"{safeCnt} 项 · 应用开着即可清";
+            ? (Loc.IsEnglish ? "Read-only zone · 0 deletable" : "只读诊断专区 · 0 删除候选")
+            : (Loc.IsEnglish ? $"{safeCnt} items · Clean while running" : $"{safeCnt} 项 · 应用开着即可清");
 
         TxtKpiRecycle.Text = CleanCandidate.FormatBytes(rep.RecycleCandidateBytes);
         TxtKpiRecycleSub.Text = def.IsReadOnlyZone
-            ? "受保护 · 绝不自动回收"
-            : $"{recCnt} 项 · 移入回收站可恢复";
+            ? (Loc.IsEnglish ? "Protected · Never auto-recycled" : "受保护 · 绝不自动回收")
+            : (Loc.IsEnglish ? $"{recCnt} items · Reversible Recycle Bin" : $"{recCnt} 项 · 移入回收站可恢复");
 
         bool showDiagInKpi3 = def.IsReadOnlyZone || (offCnt == 0 && diagCnt > 0);
         if (showDiagInKpi3)
@@ -836,8 +875,8 @@ public partial class MainWindow : Window
         }
 
         BtnSelectRecommended.Content = recoCnt > 0
-            ? $"勾选高置信推荐 ({recoCnt})"
-            : "勾选高置信推荐";
+            ? (Loc.IsEnglish ? $"Select Recommended ({recoCnt})" : $"勾选高置信推荐 ({recoCnt})")
+            : Loc.T("BtnSelectReco");
 
         UpdateBreakdownBar(rep);
         UpdateGlobalSafeCleanButton();
@@ -846,12 +885,13 @@ public partial class MainWindow : Window
 
     private void UpdateBreakdownBar(ZoneScanReport? rep)
     {
+        bool en = Loc.IsEnglish;
         if (rep == null)
         {
             ColBarSafe.Width = new GridLength(1, GridUnitType.Star);
             ColBarRecycle.Width = new GridLength(1, GridUnitType.Star);
             ColBarOffline.Width = new GridLength(1, GridUnitType.Star);
-            TxtBreakdownSummary.Text = "正在统计空间分布...";
+            TxtBreakdownSummary.Text = en ? "Calculating space breakdown..." : "正在统计空间分布...";
             return;
         }
 
@@ -866,8 +906,9 @@ public partial class MainWindow : Window
             ColBarRecycle.Width = new GridLength(0, GridUnitType.Star);
             ColBarOffline.Width = new GridLength(rep.DiagnosticBytes > 0 ? 1 : 0, GridUnitType.Star);
             TxtBreakdownSummary.Text = rep.DiagnosticBytes > 0
-                ? $"只读雷达总计 {CleanCandidate.FormatBytes(rep.DiagnosticBytes)}（严禁自动删除，不计入可释放量）"
-                : "当前专区已非常洁净（0 B 待清理）";
+                ? (en ? $"Read-only radar total {CleanCandidate.FormatBytes(rep.DiagnosticBytes)} (never auto-deleted)"
+                      : $"只读雷达总计 {CleanCandidate.FormatBytes(rep.DiagnosticBytes)}（严禁自动删除，不计入可释放量）")
+                : (en ? "This zone is clean (0 B reclaimable)" : "当前专区已非常洁净（0 B 待清理）");
             return;
         }
 
@@ -875,9 +916,14 @@ public partial class MainWindow : Window
         ColBarRecycle.Width = new GridLength(r > 0 ? Math.Max(0.03, (double)r / total) : 0, GridUnitType.Star);
         ColBarOffline.Width = new GridLength(o > 0 ? Math.Max(0.03, (double)o / total) : 0, GridUnitType.Star);
 
-        long nowCleanable = s + r + (rep.ProcessInfo.IsRunning ? 0 : o);
-        string diagNote = rep.DiagnosticBytes > 0 ? $" · 只读雷达 {CleanCandidate.FormatBytes(rep.DiagnosticBytes)}" : "";
-        TxtBreakdownSummary.Text = $"可立即释放 {CleanCandidate.FormatBytes(nowCleanable)} / 总发现 {CleanCandidate.FormatBytes(total)}（绿 {CleanCandidate.FormatBytes(s)} · 黄 {CleanCandidate.FormatBytes(r)} · 蓝 {CleanCandidate.FormatBytes(o)}{diagNote}）";
+        // Uses CleanableOfflineCacheBytes for accurate per-IDE unlocked accounting!
+        long nowCleanable = s + r + Math.Max(0, rep.CleanableOfflineCacheBytes);
+        string diagNote = rep.DiagnosticBytes > 0
+            ? (en ? $" · Radar {CleanCandidate.FormatBytes(rep.DiagnosticBytes)}" : $" · 只读雷达 {CleanCandidate.FormatBytes(rep.DiagnosticBytes)}")
+            : "";
+        TxtBreakdownSummary.Text = en
+            ? $"Reclaim now {CleanCandidate.FormatBytes(nowCleanable)} / Total {CleanCandidate.FormatBytes(total)} (G {CleanCandidate.FormatBytes(s)} · Y {CleanCandidate.FormatBytes(r)} · B {CleanCandidate.FormatBytes(o)}{diagNote})"
+            : $"可立即释放 {CleanCandidate.FormatBytes(nowCleanable)} / 总发现 {CleanCandidate.FormatBytes(total)}（绿 {CleanCandidate.FormatBytes(s)} · 黄 {CleanCandidate.FormatBytes(r)} · 蓝 {CleanCandidate.FormatBytes(o)}{diagNote}）";
     }
 
     private void UpdateInspector(CleanCandidate? item)
@@ -887,9 +933,9 @@ public partial class MainWindow : Window
             BadgeInspectorTier.Background = BrInspDefaultBg;
             BadgeInspectorTier.BorderBrush = BrInspDefaultBorder;
             TxtInspectorTier.Foreground = BrInspDefaultInk;
-            TxtInspectorTier.Text = "项目透视";
-            TxtInspectorPath.Text = "单击列表任意项目，在此查看完整绝对路径、安全判定与清理影响评估（双击打开目录）";
-            TxtInspectorVerdict.Text = "双层红线校验：运行中仅清理超期未占用文件，大目录与安装包残留均移入 Windows 回收站可随时还原。";
+            TxtInspectorTier.Text = Loc.T("InspectorDefaultTitle");
+            TxtInspectorPath.Text = Loc.T("InspectorDefaultPath");
+            TxtInspectorVerdict.Text = Loc.T("InspectorDefaultVerdict");
             BtnInspectorCopy.IsEnabled = false;
             return;
         }
@@ -901,7 +947,7 @@ public partial class MainWindow : Window
         TxtInspectorTier.Text = item.TierBadge;
         TxtInspectorPath.Text = item.Path;
         string statsSuffix = item.JunctionCount > 0 || item.RecentSkippedCount > 0
-            ? $"（自动保护跳过：近期 {item.RecentSkippedCount} / 联接 {item.JunctionCount}）"
+            ? (Loc.IsEnglish ? $" (Protected skips: recent {item.RecentSkippedCount} / junctions {item.JunctionCount})" : $"（自动保护跳过：近期 {item.RecentSkippedCount} / 联接 {item.JunctionCount}）")
             : "";
         TxtInspectorVerdict.Text = item.VerdictImpactText + statsSuffix;
         BtnInspectorCopy.IsEnabled = !string.IsNullOrWhiteSpace(item.Path);
@@ -954,15 +1000,15 @@ public partial class MainWindow : Window
         if (_isCleaning || _scanningZones.Contains(_currentZone) || !_reports.TryGetValue(_currentZone, out var rep))
         {
             BtnCleanSelected.IsEnabled = false;
-            BtnCleanSelected.Content = "执行已勾选清理 (0 项)";
+            BtnCleanSelected.Content = Loc.T("BtnCleanZero");
             return;
         }
         var selected = rep.Candidates.Where(c => c.IsSelected && c.CanSelect).ToList();
         long bytes = selected.Sum(c => c.SizeBytes);
         BtnCleanSelected.IsEnabled = selected.Count > 0;
         BtnCleanSelected.Content = selected.Count > 0
-            ? $"执行已勾选清理 ({selected.Count} 项 · {CleanCandidate.FormatBytes(bytes)})"
-            : "执行已勾选清理 (0 项)";
+            ? (Loc.IsEnglish ? $"Clean Selected ({selected.Count} · {CleanCandidate.FormatBytes(bytes)})" : $"执行已勾选清理 ({selected.Count} 项 · {CleanCandidate.FormatBytes(bytes)})")
+            : Loc.T("BtnCleanZero");
     }
 
     private async Task RefreshScheduleStatusAsync()

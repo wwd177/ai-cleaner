@@ -533,11 +533,11 @@ public static class GlassDialogs
             }
 
             var fresh = SettingsStore.Load();
-            fresh.TempMinAgeDays = (int)((ComboBoxItem)cmbTempDays.SelectedItem).Tag;
-            fresh.WorkspaceMinSizeMB = (int)((ComboBoxItem)cmbWsMB.SelectedItem).Tag;
-            fresh.WorkspaceMinAgeDays = (int)((ComboBoxItem)cmbWsDays.SelectedItem).Tag;
+            fresh.TempMinAgeDays = (cmbTempDays.SelectedItem as ComboBoxItem)?.Tag as int? ?? current.TempMinAgeDays;
+            fresh.WorkspaceMinSizeMB = (cmbWsMB.SelectedItem as ComboBoxItem)?.Tag as int? ?? current.WorkspaceMinSizeMB;
+            fresh.WorkspaceMinAgeDays = (cmbWsDays.SelectedItem as ComboBoxItem)?.Tag as int? ?? current.WorkspaceMinAgeDays;
             fresh.EnableTrayLowSpaceAlert = chkTray.IsChecked == true;
-            fresh.LowSpaceAlertThresholdGB = (int)((ComboBoxItem)cmbTrayGb.SelectedItem).Tag;
+            fresh.LowSpaceAlertThresholdGB = (cmbTrayGb.SelectedItem as ComboBoxItem)?.Tag as int? ?? current.LowSpaceAlertThresholdGB;
             fresh.CustomCodexCacheRoot = cacheRoot;
             fresh.ExtraWorkspaceRoots = validatedWs;
             fresh.ExtraProtectedSubtrees = protList.Items.Cast<string>().ToList();
@@ -641,7 +641,7 @@ public static class GlassDialogs
         foreach (var def in ZoneCatalog.All)
         {
             reports.TryGetValue(def.Id, out var rep);
-            long cleanable = rep == null ? 0 : (rep.SafeOnlineBytes + rep.RecycleCandidateBytes + (rep.ProcessInfo.IsRunning ? 0 : rep.OfflineCacheBytes));
+            long cleanable = rep == null ? 0 : (rep.SafeOnlineBytes + rep.RecycleCandidateBytes + rep.CleanableOfflineCacheBytes);
             long diag = rep?.DiagnosticBytes ?? 0;
 
             var tile = new Border

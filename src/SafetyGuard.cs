@@ -297,7 +297,7 @@ public static class SafetyGuard
     public static string NormalizePath(string path) =>
         TryNormalizePath(path, out var norm) ? norm : "";
 
-    private static bool IsHardSubtreeMatch(string key, bool protectAncestors)
+    private static bool IsHardSubtreeMatch(string key, bool protectAncestors, bool includeDynamicCustomRules = true)
     {
         if (TryNormalizePath(Path.Combine(LocalApp, @"Packages\OpenAI.Codex"), out var pkgPrefix) &&
             key.StartsWith(pkgPrefix, StringComparison.OrdinalIgnoreCase))
@@ -328,6 +328,9 @@ public static class SafetyGuard
             if (protectAncestors && p.StartsWith(key + "\\", StringComparison.OrdinalIgnoreCase))
                 return true;
         }
+
+        if (!includeDynamicCustomRules)
+            return false;
 
         // Also enforce custom user-configured protected subtrees and CustomCodexCacheRoot runtime/staging subdirs
         var extraProtected = SettingsStore.GetNormalizedExtraProtectedSubtrees();
@@ -519,11 +522,24 @@ public static class SafetyGuard
             }
         }
 
-        // Block hardcoded redline subtrees (exact, child, or ancestor of any redline like .codex/.claude/.ssh/Documents/Desktop)
-        if (IsHardSubtreeMatch(key, protectAncestors: true))
+        // Block built-in engine redline subtrees (exact, child, or ancestor of .codex/.claude/.gemini/.dsh/.ssh/Documents/Desktop)
+        if (IsHardSubtreeMatch(key, protectAncestors: true, includeDynamicCustomRules: false))
         {
             error = "目标路径与引擎硬保护红区（如 .codex / .claude / .gemini / .dsh / .ssh / Documents / Desktop）重叠或为其祖先目录，已拦截。";
             return false;
+        }
+
+        // Block setting a user-configured ExtraProtectedSubtree (or its child) itself as a workspace/cache root,
+        // while ALLOWING a parent workspace root that contains inner ExtraProtectedSubtrees or CustomCodexCacheRoot\runtimes!
+        var extraProtected = SettingsStore.GetNormalizedExtraProtectedSubtrees();
+        for (int i = 0; i < extraProtected.Length; i++)
+        {
+            var p = extraProtected[i];
+            if (key == p || key.StartsWith(p + "\\", StringComparison.OrdinalIgnoreCase))
+            {
+                error = "目标路径位于您配置的额外硬保护目录内，禁止将其设为可清理的工作区或缓存根目录。";
+                return false;
+            }
         }
 
         // If the directory already exists on disk, ensure no ancestor segment is a reparse point / NTFS junction
@@ -2103,16 +2119,43 @@ public static class SafetyGuard
                 var origSetV32 = SettingsStore.Load();
                 try
                 {
+                    // Regression for P0 Bugfix: CustomCodexCacheRoot MUST NOT be self-blocked by its own internal runtimes/staging redline,
+                    // and a parent ExtraWorkspaceRoot containing inner ExtraProtectedSubtrees MUST remain valid while protecting the inner dir!
+                    string codexCustomTest = Path.Combine(sandbox, "custom_codex_cache");
+                    string wsWithInnerProt = Path.Combine(sandbox, "ws_parent");
+                    string innerProtDir = Path.Combine(wsWithInnerProt, "keep_core");
+                    Directory.CreateDirectory(Path.Combine(codexCustomTest, "temp"));
+                    Directory.CreateDirectory(Path.Combine(codexCustomTest, "runtimes"));
+                    Directory.CreateDirectory(innerProtDir);
+
                     var probe = origSetV32.Clone();
                     probe.UiLanguage = "fr-FR"; // unsupported -> must normalize to zh-CN
                     probe.LowSpaceAlertThresholdGB = 9999; // out of range -> must clamp to 200
                     probe.EnableTrayLowSpaceAlert = false;
+                    probe.CustomCodexCacheRoot = codexCustomTest;
+                    probe.ExtraWorkspaceRoots.Add(wsWithInnerProt);
+                    probe.ExtraProtectedSubtrees.Add(innerProtDir);
                     SettingsStore.Save(probe);
                     var reloaded = SettingsStore.Load();
                     Assert("v32_settings_i18n_and_tray_normalization",
                         reloaded.UiLanguage == "zh-CN" &&
                         reloaded.LowSpaceAlertThresholdGB == 200 &&
                         !reloaded.EnableTrayLowSpaceAlert);
+                    Assert("bugfix_custom_codex_root_not_self_blocked_by_runtimes",
+                        ValidateCustomRootPath(codexCustomTest, out _) &&
+                        IsProtectedForDelete(Path.Combine(codexCustomTest, "runtimes")) &&
+                        IsAuthorizedExecutionTarget(new CleanCandidate
+                        {
+                            Zone = ZoneId.GptCodex,
+                            Tier = CleanTier.SafeOnline,
+                            ActionType = CleanActionType.SweepExpiredFiles,
+                            Path = Path.Combine(codexCustomTest, "temp"),
+                            CanSelect = true
+                        }, out _));
+                    Assert("bugfix_workspace_root_with_inner_protected_subdir_allowed",
+                        ValidateCustomRootPath(wsWithInnerProt, out _) &&
+                        !ValidateCustomRootPath(innerProtDir, out _) &&
+                        IsProtectedForDelete(innerProtDir));
                 }
                 finally
                 {

@@ -175,6 +175,86 @@ public static class DiagnosticPackLoader
         return true;
     }
 
+    public static bool IsPackSensitiveDescendant(string path)
+    {
+        if (!SafetyGuard.TryNormalizePath(path, out var norm)) return true;
+        foreach (var blocked in PackSensitiveBlocks)
+        {
+            if (norm == blocked || norm.StartsWith(blocked + "\\", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    private static DirStats MeasurePackDirectorySafely(string rootPath, CancellationToken ct)
+    {
+        var stats = new DirStats();
+        ct.ThrowIfCancellationRequested();
+        if (!Directory.Exists(rootPath)) return stats;
+        var rootInfo = new DirectoryInfo(rootPath);
+        if (SafetyGuard.IsReparsePoint(rootInfo) || IsPackSensitiveDescendant(rootPath))
+        {
+            stats.RootIsJunction = true;
+            stats.JunctionCount = 1;
+            return stats;
+        }
+        stats.NewestWriteUtc = rootInfo.LastWriteTimeUtc;
+
+        var stack = new Stack<string>();
+        stack.Push(rootPath);
+        while (stack.Count > 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            var curr = stack.Pop();
+            DirectoryInfo di;
+            try { di = new DirectoryInfo(curr); } catch { continue; }
+            if (SafetyGuard.IsReparsePoint(di) || IsPackSensitiveDescendant(di.FullName))
+            {
+                stats.JunctionCount++;
+                continue;
+            }
+            try
+            {
+                foreach (var f in di.EnumerateFiles())
+                {
+                    ct.ThrowIfCancellationRequested();
+                    try
+                    {
+                        if (SafetyGuard.IsReparsePoint(f)) { stats.JunctionCount++; continue; }
+                        stats.TotalBytes += f.Length;
+                        stats.FileCount++;
+                        if (f.LastWriteTimeUtc > stats.NewestWriteUtc) stats.NewestWriteUtc = f.LastWriteTimeUtc;
+                    }
+                    catch (UnauthorizedAccessException) { stats.AccessDeniedCount++; }
+                    catch { }
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (UnauthorizedAccessException) { stats.AccessDeniedCount++; }
+            catch { }
+
+            try
+            {
+                foreach (var d in di.EnumerateDirectories())
+                {
+                    ct.ThrowIfCancellationRequested();
+                    try
+                    {
+                        if (SafetyGuard.IsReparsePoint(d) || IsPackSensitiveDescendant(d.FullName)) { stats.JunctionCount++; continue; }
+                        stats.DirCount++;
+                        stack.Push(d.FullName);
+                    }
+                    catch (UnauthorizedAccessException) { stats.AccessDeniedCount++; }
+                    catch { }
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (UnauthorizedAccessException) { stats.AccessDeniedCount++; }
+            catch { }
+        }
+        return stats;
+    }
+
     public static List<(string PackName, CommunityDiagnosticEntry Entry, string ResolvedPath)> LoadValidEntriesFromDirectory(
         string directoryPath, out List<string> rejectedReasons)
     {
@@ -331,7 +411,7 @@ public static class DiagnosticPackLoader
                 }
                 else
                 {
-                    var st = SafetyGuard.MeasureDirectory(resolved, ct);
+                    var st = MeasurePackDirectorySafely(resolved, ct);
                     accessDeniedAccum += st.AccessDeniedCount;
                     if (st.TotalBytes <= 0 && st.FileCount == 0) continue;
                     bytes = st.TotalBytes;
