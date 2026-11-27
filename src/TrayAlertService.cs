@@ -174,6 +174,7 @@ public sealed class TrayAlertService : IDisposable
             _timer.Stop();
             _timer = null;
         }
+        bool hadIcon = _icon != null;
         if (_icon != null)
         {
             try
@@ -185,13 +186,15 @@ public sealed class TrayAlertService : IDisposable
             catch { }
             _icon = null;
         }
-        if (restoreIfHidden && !_disposed)
+        // Only restore an already-loaded window that was genuinely hidden to an active tray icon!
+        // Never call _owner.Show() during MainWindow construction before Loaded is attached.
+        if (hadIcon && restoreIfHidden && !_disposed && _owner.IsLoaded)
         {
             try
             {
                 _owner.Dispatcher.Invoke(() =>
                 {
-                    if (!_owner.IsVisible) _owner.Show();
+                    if (_owner.IsLoaded && !_owner.IsVisible) _owner.Show();
                 });
             }
             catch { }

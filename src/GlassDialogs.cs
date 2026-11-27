@@ -44,12 +44,13 @@ public static class GlassDialogs
 
     public static void ShowHistoryDialog(Window owner)
     {
+        bool en = Loc.IsEnglish;
         var audits = SafetyGuard.LoadHistoryAudits();
         long totalFreed = audits.Sum(a => a.TotalFreedBytes);
 
         var win = new Window
         {
-            Title = "清理历史与累计释放统计",
+            Title = en ? "Cleanup History & Cumulative Space Freed" : "清理历史与累计释放统计",
             Owner = owner,
             Width = 760,
             Height = 520,
@@ -79,13 +80,17 @@ public static class GlassDialogs
         var hLeft = new StackPanel();
         hLeft.Children.Add(new TextBlock
         {
-            Text = $"累计安全释放：{CleanCandidate.FormatBytes(totalFreed)}（共 {audits.Count} 次记录）",
+            Text = en
+                ? $"Cumulative Space Freed: {CleanCandidate.FormatBytes(totalFreed)} ({audits.Count} runs)"
+                : $"累计安全释放：{CleanCandidate.FormatBytes(totalFreed)}（共 {audits.Count} 次记录）",
             FontSize = 15,
             FontWeight = FontWeights.Bold
         });
         hLeft.Children.Add(new TextBlock
         {
-            Text = $"所有操作均保存在 {SafetyGuard.LogsDir}，回收站项可随时还原。",
+            Text = en
+                ? $"Audit logs saved under {SafetyGuard.LogsDir}. Recycled items remain restorable from Windows Recycle Bin."
+                : $"所有操作均保存在 {SafetyGuard.LogsDir}，回收站项可随时还原。",
             FontSize = 11.5,
             Foreground = new SolidColorBrush(Color.FromRgb(71, 98, 130)),
             Margin = new Thickness(0, 3, 0, 0)
@@ -94,7 +99,7 @@ public static class GlassDialogs
 
         var btnLogs = new Button
         {
-            Content = "打开日志文件夹",
+            Content = en ? "Open Logs Folder" : "打开日志文件夹",
             Style = (Style)Application.Current.FindResource("GlassBtn"),
             VerticalAlignment = VerticalAlignment.Center
         };
@@ -212,22 +217,23 @@ public static class GlassDialogs
 
     public static bool ShowSettingsAndWhitelistDialog(Window owner)
     {
+        bool en = Loc.IsEnglish;
         var current = SettingsStore.Load();
         bool changed = false;
 
         var win = new Window
         {
-            Title = "策略阈值、白名单与自定义工作区管理",
+            Title = en ? "Rules, Whitelist & Custom Workspaces" : "策略阈值、白名单与自定义工作区管理",
             Owner = owner,
-            Width = 740,
-            Height = 580,
+            Width = 760,
+            Height = 600,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             Background = new LinearGradientBrush(Color.FromRgb(246, 250, 255), Color.FromRgb(230, 241, 255), 45),
             FontFamily = new FontFamily("Microsoft YaHei UI"),
             Foreground = new SolidColorBrush(Color.FromRgb(15, 33, 61)),
             ResizeMode = ResizeMode.CanResizeWithGrip,
-            MinWidth = 660,
-            MinHeight = 520
+            MinWidth = 680,
+            MinHeight = 540
         };
         ApplyIceBlueTitleBar(win);
 
@@ -242,7 +248,7 @@ public static class GlassDialogs
         };
         var btnCancel = new Button
         {
-            Content = "取消",
+            Content = en ? "Cancel" : "取消",
             Style = (Style)Application.Current.FindResource("GlassBtn"),
             Margin = new Thickness(0, 0, 8, 0),
             MinWidth = 80,
@@ -252,7 +258,7 @@ public static class GlassDialogs
 
         var btnSave = new Button
         {
-            Content = "保存并重新扫描",
+            Content = en ? "Save & Rescan" : "保存并重新扫描",
             Style = (Style)Application.Current.FindResource("PrimaryGlassBtn")
         };
         footer.Children.Add(btnCancel);
@@ -311,12 +317,14 @@ public static class GlassDialogs
         trayRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var chkTray = new CheckBox
         {
-            Content = "启用轻量系统托盘低空间预警（默认关闭 · 零网络遥测 · 关闭窗口时最小化至托盘）",
+            Content = en
+                ? "Enable lightweight tray low-disk alert (off by default · zero telemetry · hides to tray on close)"
+                : "启用轻量系统托盘低空间预警（默认关闭 · 零网络遥测 · 关闭窗口时最小化至托盘）",
             IsChecked = current.EnableTrayLowSpaceAlert,
             FontSize = 12,
             VerticalAlignment = VerticalAlignment.Center
         };
-        var cmbTrayGb = MakeChoiceBox(new[] { 10, 20, 30, 50, 100 }, current.LowSpaceAlertThresholdGB, " GB 预警");
+        var cmbTrayGb = MakeChoiceBox(new[] { 10, 20, 30, 50, 100 }, current.LowSpaceAlertThresholdGB, en ? " GB alert" : " GB 预警");
         cmbTrayGb.Width = 118;
         cmbTrayGb.Margin = new Thickness(10, 0, 0, 0);
         cmbTrayGb.IsEnabled = current.EnableTrayLowSpaceAlert;
@@ -383,7 +391,7 @@ public static class GlassDialogs
             }
         };
 
-        tabs.Items.Add(new TabItem { Header = "策略阈值与白名单", Content = tab1Panel });
+        tabs.Items.Add(new TabItem { Header = en ? "Thresholds & Whitelist" : "策略阈值与白名单", Content = tab1Panel });
 
         // === TAB 2: GUI Custom Workspaces, Codex Cache Root & Extra Protected Redlines ===
         static string? PickFolder(Window ownerWin, string title)
@@ -411,7 +419,9 @@ public static class GlassDialogs
         var cacheStack = new StackPanel();
         cacheStack.Children.Add(new TextBlock
         {
-            Text = "自定义 Codex 缓存根目录（可选：如已迁移至其他磁盘；自动硬保护 runtimes / plugin-staging / command-staging）",
+            Text = en
+                ? "Custom Codex Cache Root (optional, e.g. moved to another drive; auto-protects runtimes / plugin-staging / command-staging)"
+                : "自定义 Codex 缓存根目录（可选：如已迁移至其他磁盘；自动硬保护 runtimes / plugin-staging / command-staging）",
             FontSize = 12,
             FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(0, 0, 0, 6)
@@ -433,20 +443,20 @@ public static class GlassDialogs
         };
         var btnBrowseCache = new Button
         {
-            Content = "选择目录",
+            Content = en ? "Browse..." : "选择目录",
             Style = (Style)Application.Current.FindResource("GlassBtn"),
             Margin = new Thickness(8, 0, 6, 0),
             Padding = new Thickness(10, 4, 10, 4)
         };
         var btnClearCache = new Button
         {
-            Content = "清空",
+            Content = en ? "Clear" : "清空",
             Style = (Style)Application.Current.FindResource("GlassBtn"),
             Padding = new Thickness(10, 4, 10, 4)
         };
         btnBrowseCache.Click += (_, _) =>
         {
-            var picked = PickFolder(win, "选择自定义 Codex 缓存根目录");
+            var picked = PickFolder(win, en ? "Select Custom Codex Cache Root" : "选择自定义 Codex 缓存根目录");
             if (!string.IsNullOrWhiteSpace(picked)) txtCodexCache.Text = picked;
         };
         btnClearCache.Click += (_, _) => txtCodexCache.Text = "";
@@ -470,15 +480,17 @@ public static class GlassDialogs
         };
         foreach (var p in current.ExtraWorkspaceRoots) wsList.Items.Add(p);
         var wsCard = BuildFolderListCard(
-            "自定义 AI 工作区目录（仅授予扫描范围，大目录均走回收站，绝不扩张绕过红线的删除权限）",
+            en
+                ? "Custom AI Workspace Roots (scan scope only; large dirs go to Recycle Bin and never bypass hard redlines)"
+                : "自定义 AI 工作区目录（仅授予扫描范围，大目录均走回收站，绝不扩张绕过红线的删除权限）",
             wsList,
             () =>
             {
-                var picked = PickFolder(win, "添加要纳入体检的工作区根目录");
+                var picked = PickFolder(win, en ? "Add AI Workspace Root to Audit" : "添加要纳入体检的工作区根目录");
                 if (string.IsNullOrWhiteSpace(picked)) return;
                 if (!SafetyGuard.ValidateCustomRootPath(picked, out var err) || !SafetyGuard.TryNormalizePath(picked, out var norm))
                 {
-                    MessageBox.Show(win, err, "安全拦截", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    MessageBox.Show(win, err, en ? "Safety Guard" : "安全拦截", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
                 if (wsList.Items.Cast<string>().Any(x => SafetyGuard.NormalizePath(x) == norm)) return;
@@ -497,11 +509,13 @@ public static class GlassDialogs
         };
         foreach (var p in current.ExtraProtectedSubtrees) protList.Items.Add(p);
         var protCard = BuildFolderListCard(
-            "额外硬保护目录（永久禁止删除其自身、子目录与任何祖先目录）",
+            en
+                ? "Extra Hard-Protected Directories (permanently blocks deleting self, children, or any ancestor)"
+                : "额外硬保护目录（永久禁止删除其自身、子目录与任何祖先目录）",
             protList,
             () =>
             {
-                var picked = PickFolder(win, "添加额外硬保护目录");
+                var picked = PickFolder(win, en ? "Add Hard-Protected Directory" : "添加额外硬保护目录");
                 if (string.IsNullOrWhiteSpace(picked)) return;
                 if (!SafetyGuard.TryNormalizePath(picked, out var norm)) return;
                 if (protList.Items.Cast<string>().Any(x => SafetyGuard.NormalizePath(x) == norm)) return;
@@ -510,7 +524,7 @@ public static class GlassDialogs
         Grid.SetRow(protCard, 4);
         tab2Grid.Children.Add(protCard);
 
-        tabs.Items.Add(new TabItem { Header = "自定义工作区与红区目录", Content = tab2Grid });
+        tabs.Items.Add(new TabItem { Header = en ? "Custom Workspaces & Redlines" : "自定义工作区与红区目录", Content = tab2Grid });
         root.Children.Add(tabs);
 
         btnSave.Click += (_, _) =>
@@ -518,7 +532,9 @@ public static class GlassDialogs
             string cacheRoot = txtCodexCache.Text.Trim();
             if (!string.IsNullOrEmpty(cacheRoot) && !SafetyGuard.ValidateCustomRootPath(cacheRoot, out var cacheErr))
             {
-                MessageBox.Show(win, $"自定义 Codex 缓存根目录校验未通过：\n{cacheErr}", "安全拦截", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(win,
+                    en ? $"Custom Codex cache root validation failed:\n{cacheErr}" : $"自定义 Codex 缓存根目录校验未通过：\n{cacheErr}",
+                    en ? "Safety Guard" : "安全拦截", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
             var validatedWs = new List<string>();
@@ -526,7 +542,9 @@ public static class GlassDialogs
             {
                 if (!SafetyGuard.ValidateCustomRootPath(rawWs, out var wsErr))
                 {
-                    MessageBox.Show(win, $"工作区目录「{rawWs}」校验未通过：\n{wsErr}", "安全拦截", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    MessageBox.Show(win,
+                        en ? $"Workspace root \"{rawWs}\" validation failed:\n{wsErr}" : $"工作区目录「{rawWs}」校验未通过：\n{wsErr}",
+                        en ? "Safety Guard" : "安全拦截", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
                 validatedWs.Add(rawWs);
@@ -819,17 +837,18 @@ public static class GlassDialogs
             TextTrimming = TextTrimming.CharacterEllipsis
         });
 
+        bool en = Loc.IsEnglish;
         var btns = new StackPanel { Orientation = Orientation.Horizontal };
         var btnAdd = new Button
         {
-            Content = "+ 添加目录",
+            Content = en ? "+ Add Folder" : "+ 添加目录",
             Style = (Style)Application.Current.FindResource("GlassBtn"),
             Padding = new Thickness(10, 3.5, 10, 3.5),
             Margin = new Thickness(8, 0, 6, 0)
         };
         var btnRem = new Button
         {
-            Content = "移除选中",
+            Content = en ? "Remove" : "移除选中",
             Style = (Style)Application.Current.FindResource("GlassBtn"),
             Padding = new Thickness(10, 3.5, 10, 3.5)
         };
@@ -849,13 +868,14 @@ public static class GlassDialogs
     /// <summary>Roomy / Mole inspired interactive Read-Only Space Map & Top-N Large File Radar.</summary>
     public static bool ShowSpaceMapDialog(Window owner, string initialPath, string title)
     {
+        bool en = Loc.IsEnglish;
         bool whitelistChanged = false;
         string currentPath = File.Exists(initialPath) ? (Path.GetDirectoryName(initialPath) ?? initialPath) : initialPath;
         var navStack = new Stack<string>();
 
         var win = new Window
         {
-            Title = $"空间雷达透视 (只读) · {title}",
+            Title = en ? $"Space Radar (Read-Only) · {title}" : $"空间雷达透视 (只读) · {title}",
             Owner = owner,
             Width = 860,
             Height = 560,
@@ -893,7 +913,9 @@ public static class GlassDialogs
         };
         var txtSummary = new TextBlock
         {
-            Text = "正在并行透视空间分布（100% 只读，不穿越 NTFS 目录联接）...",
+            Text = en
+                ? "Inspecting directory breakdown in parallel (100% read-only, skipping NTFS junctions)..."
+                : "正在并行透视空间分布（100% 只读，不穿越 NTFS 目录联接）...",
             FontSize = 11.5,
             Foreground = new SolidColorBrush(Color.FromRgb(71, 98, 130)),
             Margin = new Thickness(0, 3, 0, 0)
@@ -904,7 +926,7 @@ public static class GlassDialogs
 
         var btnBack = new Button
         {
-            Content = "← 返回上级",
+            Content = en ? "← Back" : "← 返回上级",
             Style = (Style)Application.Current.FindResource("GlassBtn"),
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(12, 0, 0, 0),
@@ -921,13 +943,13 @@ public static class GlassDialogs
         var leftBtns = new StackPanel { Orientation = Orientation.Horizontal };
         var btnOpen = new Button
         {
-            Content = "定位文件夹",
+            Content = en ? "Open Folder" : "定位文件夹",
             Style = (Style)Application.Current.FindResource("GlassBtn"),
             Margin = new Thickness(0, 0, 8, 0)
         };
         var btnWl = new Button
         {
-            Content = "加入保留白名单",
+            Content = en ? "Add to Whitelist" : "加入保留白名单",
             Style = (Style)Application.Current.FindResource("GlassBtn"),
             Margin = new Thickness(0, 0, 8, 0)
         };
@@ -938,7 +960,7 @@ public static class GlassDialogs
 
         var btnClose = new Button
         {
-            Content = "关闭",
+            Content = en ? "Close" : "关闭",
             Style = (Style)Application.Current.FindResource("PrimaryGlassBtn"),
             HorizontalAlignment = HorizontalAlignment.Right,
             Width = 90,
@@ -969,19 +991,19 @@ public static class GlassDialogs
 
         grid.Columns.Add(new DataGridTextColumn
         {
-            Header = "类型",
+            Header = en ? "Type" : "类型",
             Binding = new System.Windows.Data.Binding("TypeBadge"),
             Width = 56
         });
         grid.Columns.Add(new DataGridTextColumn
         {
-            Header = "名称（双击子目录可下钻）",
+            Header = en ? "Name (double-click folder to drill down)" : "名称（双击子目录可下钻）",
             Binding = new System.Windows.Data.Binding("Name"),
             Width = new DataGridLength(1.6, DataGridLengthUnitType.Star)
         });
 
         // Proportion visual bar column
-        var barCol = new DataGridTemplateColumn { Header = "体积占比", Width = 178 };
+        var barCol = new DataGridTemplateColumn { Header = en ? "Share" : "体积占比", Width = 178 };
         var barTpl = new DataTemplate();
         var spFactory = new FrameworkElementFactory(typeof(StackPanel));
         spFactory.SetValue(StackPanel.OrientationProperty, Orientation.Horizontal);
@@ -1015,19 +1037,19 @@ public static class GlassDialogs
 
         grid.Columns.Add(new DataGridTextColumn
         {
-            Header = "大小",
+            Header = en ? "Size" : "大小",
             Binding = new System.Windows.Data.Binding("SizeText"),
             Width = 92
         });
         grid.Columns.Add(new DataGridTextColumn
         {
-            Header = "文件数",
+            Header = en ? "Files" : "文件数",
             Binding = new System.Windows.Data.Binding("FileCount"),
             Width = 72
         });
         grid.Columns.Add(new DataGridTextColumn
         {
-            Header = "保护状态",
+            Header = en ? "Protection" : "保护状态",
             Binding = new System.Windows.Data.Binding("ProtectionNote"),
             Width = new DataGridLength(1.0, DataGridLengthUnitType.Star)
         });
@@ -1055,7 +1077,7 @@ public static class GlassDialogs
 
             currentPath = path;
             txtPath.Text = path;
-            txtSummary.Text = "正在并行计算子项体积（跳过 NTFS 联接）...";
+            txtSummary.Text = en ? "Calculating child sizes in parallel (skipping NTFS junctions)..." : "正在并行计算子项体积（跳过 NTFS 联接）...";
             btnBack.IsEnabled = navStack.Count > 0;
             grid.ItemsSource = null;
 
@@ -1069,7 +1091,9 @@ public static class GlassDialogs
                 if (isClosed || mySeq != navSeq) return;
 
                 grid.ItemsSource = entries;
-                txtSummary.Text = $"当前目录可见总计 {CleanCandidate.FormatBytes(totalBytes)} · 展示 Top {entries.Count} 项 · 耗时 {sw.ElapsedMilliseconds} ms（100% 只读）";
+                txtSummary.Text = en
+                    ? $"Visible total {CleanCandidate.FormatBytes(totalBytes)} · Top {entries.Count} items · {sw.ElapsedMilliseconds} ms (100% read-only)"
+                    : $"当前目录可见总计 {CleanCandidate.FormatBytes(totalBytes)} · 展示 Top {entries.Count} 项 · 耗时 {sw.ElapsedMilliseconds} ms（100% 只读）";
             }
             catch (OperationCanceledException)
             {
@@ -1078,7 +1102,7 @@ public static class GlassDialogs
             catch (Exception ex)
             {
                 if (!isClosed && mySeq == navSeq)
-                    txtSummary.Text = $"目录读取受限：{ex.Message}";
+                    txtSummary.Text = en ? $"Directory access restricted: {ex.Message}" : $"目录读取受限：{ex.Message}";
             }
         }
 
@@ -1129,7 +1153,9 @@ public static class GlassDialogs
         {
             if (grid.SelectedItem is not SpaceMapEntry entry)
             {
-                MessageBox.Show(win, "请先在列表中选中要加入白名单的目录或文件。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(win,
+                    en ? "Select a folder or file in the list first to add it to the whitelist." : "请先在列表中选中要加入白名单的目录或文件。",
+                    en ? "Hint" : "提示", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
             if (SettingsStore.AddWhitelist(entry.FullPath))
@@ -1137,11 +1163,11 @@ public static class GlassDialogs
                 whitelistChanged = true;
                 entry.IsProtected = true;
                 grid.Items.Refresh();
-                txtSummary.Text = $"已将「{entry.Name}」加入永久保留白名单！";
+                txtSummary.Text = en ? $"Added \"{entry.Name}\" to the permanent whitelist!" : $"已将「{entry.Name}」加入永久保留白名单！";
             }
             else
             {
-                txtSummary.Text = $"「{entry.Name}」已在白名单中。";
+                txtSummary.Text = en ? $"\"{entry.Name}\" is already whitelisted." : $"「{entry.Name}」已在白名单中。";
             }
         };
 
@@ -1166,7 +1192,9 @@ public static class GlassDialogs
             bool isCustom = !options.Contains(merged[i]);
             cmb.Items.Add(new ComboBoxItem
             {
-                Content = isCustom ? $"{merged[i]}{suffix}（自定义）" : merged[i] + suffix,
+                Content = isCustom
+                    ? (Loc.IsEnglish ? $"{merged[i]}{suffix} (Custom)" : $"{merged[i]}{suffix}（自定义）")
+                    : merged[i] + suffix,
                 Tag = merged[i]
             });
             if (merged[i] == selectedValue) selIdx = i;

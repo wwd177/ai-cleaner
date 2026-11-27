@@ -40,7 +40,23 @@ function Install-CleanupTask {
     if (-not (Test-Path -LiteralPath $CleanerPath)) {
         throw "未找到主脚本: $CleanerPath"
     }
-    $extraTemp = if (-not [string]::IsNullOrWhiteSpace($TempRoot)) { " -TempRoot `"$TempRoot`"" } else { '' }
+    $extraTemp = ''
+    if (-not [string]::IsNullOrWhiteSpace($TempRoot)) {
+        if ($TempRoot -match '[''"`$;\|\r\n]') {
+            throw "TempRoot 包含不安全的脚本元字符，已拒绝注册定时任务。"
+        }
+        $fullTemp = [System.IO.Path]::GetFullPath($TempRoot.Trim())
+        if ($fullTemp.TrimEnd('\', '/').Length -le 3) {
+            throw "禁止将盘符根目录设为定时任务 TempRoot。"
+        }
+        if (Test-Path -LiteralPath $fullTemp) {
+            $attr = [System.IO.File]::GetAttributes($fullTemp)
+            if (($attr -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "TempRoot 为 NTFS 联接/符号链接，已拒绝注册定时任务。"
+            }
+        }
+        $extraTemp = " -TempRoot `"$fullTemp`""
+    }
     $args = "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$CleanerPath`" -Mode ScheduledTemp -TempMinAgeDays $TempMinAgeDays$extraTemp -Apply"
     $actionObj = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $args
     $triggerObj = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At '03:30'

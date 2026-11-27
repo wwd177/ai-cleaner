@@ -94,7 +94,6 @@ public partial class MainWindow : Window
             _explicitExitRequested = true;
             Dispatcher.Invoke(Close);
         });
-        _trayService.SyncWithSettings(SettingsStore.Load(), suppressForQa: !string.IsNullOrWhiteSpace(_qaCaptureDir));
 
         // Never block Windows logoff/shutdown when minimized to tray
         if (Application.Current != null)
@@ -119,6 +118,7 @@ public partial class MainWindow : Window
 
         Loaded += async (_, _) =>
         {
+            _trayService?.SyncWithSettings(SettingsStore.Load(), suppressForQa: !string.IsNullOrWhiteSpace(_qaCaptureDir));
             RefreshDiskSpace();
             RefreshCumulativeFreed();
             RefreshPolicyButtonLabel();
@@ -256,6 +256,16 @@ public partial class MainWindow : Window
             GridCandidates.Columns[5].Header = Loc.T("ColModified");
             GridCandidates.Columns[6].Header = Loc.T("ColReason");
         }
+        bool en = Loc.IsEnglish;
+        MenuCtxRadar.Header = en ? "Inspect Large Files (Space Radar · Read-Only)" : "透视大文件 (空间雷达 · 只读)";
+        MenuCtxOpen.Header = en ? "Open in File Explorer" : "在资源管理器中打开";
+        MenuCtxCopy.Header = en ? "Copy Full Path" : "复制完整路径";
+        MenuCtxAddWl.Header = en ? "Add to Permanent Whitelist" : "加入永久保留白名单";
+        MenuCtxRemWl.Header = en ? "Remove from Whitelist" : "移出白名单保护";
+        TxtSchedulePrefix.Text = en ? "Weekly Auto-Maintenance (CodexSafeTempCleanup): " : "每周自动维护 (CodexSafeTempCleanup)：";
+        BtnToggleSchedule.Content = _scheduleInstalled
+            ? (en ? "Disable Weekly Task" : "停用定时任务")
+            : (en ? "Enable Weekly Task" : "启用每周定时任务");
         ExpUninstalledZones.Header = $"{Loc.T("UninstalledGroup")} ({_inactiveSidebarZones.Count})";
         foreach (var item in _sidebarByZone.Values) item.NotifyLocalizationChanged();
         foreach (var rep in _reports.Values)
@@ -312,6 +322,11 @@ public partial class MainWindow : Window
             TxtSearch.SelectAll();
             e.Handled = true;
         }
+        else if (e.Key == Key.D && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control && !_isCleaning)
+        {
+            BtnOverviewDashboard_Click(sender, new RoutedEventArgs());
+            e.Handled = true;
+        }
         else if (e.Key == Key.Escape && !string.IsNullOrEmpty(TxtSearch.Text))
         {
             TxtSearch.Clear();
@@ -320,6 +335,14 @@ public partial class MainWindow : Window
         else if (e.Key == Key.F5 && !_isCleaning && !_scanningZones.Contains(_currentZone))
         {
             BtnRescanZone_Click(sender, new RoutedEventArgs());
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None &&
+                 GridCandidates.IsKeyboardFocusWithin && GridCandidates.SelectedItem is CleanCandidate sel &&
+                 sel.CanSelect && e.OriginalSource is not CheckBox and not TextBox and not Button)
+        {
+            sel.IsSelected = !sel.IsSelected;
+            UpdateCleanButtonState();
             e.Handled = true;
         }
     }
@@ -359,6 +382,24 @@ public partial class MainWindow : Window
             UpdateLayout();
             await Task.Delay(120);
             SaveVisualPng(Path.Combine(outDir, $"glass-{def.Slug}.png"));
+        }
+
+        // Capture English localization QA screenshot (restore original language immediately after)
+        string origLang = Loc.CurrentLanguage;
+        try
+        {
+            Loc.SetLanguage("en-US");
+            ApplyLocalization();
+            SwitchToZoneInstant(ZoneId.Antigravity);
+            if (GridCandidates.Items.Count > 0) GridCandidates.SelectedIndex = 0;
+            UpdateLayout();
+            await Task.Delay(100);
+            SaveVisualPng(Path.Combine(outDir, "glass-antigravity-en.png"));
+        }
+        finally
+        {
+            Loc.SetLanguage(origLang);
+            ApplyLocalization();
         }
 
         File.WriteAllText(Path.Combine(outDir, "bench.txt"), bench.ToString(), new UTF8Encoding(false));
@@ -599,16 +640,23 @@ public partial class MainWindow : Window
         UpdateZoneChrome();
         if (_scanningZones.Contains(target))
         {
-            UpdateBusyIndicators($"正在后台扫描 {GetZoneName(target)}，完成后自动刷新...");
+            UpdateBusyIndicators(Loc.IsEnglish
+                ? $"Scanning {GetZoneName(target)} in background; view will refresh automatically..."
+                : $"正在后台扫描 {GetZoneName(target)}，完成后自动刷新...");
         }
         else if (_reports.TryGetValue(target, out var ready))
         {
             var def = ZoneCatalog.Get(target);
+            bool en = Loc.IsEnglish;
             string msg = def.IsReadOnlyZone
-                ? $"{def.DisplayName} 已就绪（严格只读诊断：共盘点 {CleanCandidate.FormatBytes(ready.DiagnosticBytes)}，0 删除候选，耗时 {ready.ElapsedMs} ms）。"
-                : $"{def.DisplayName} 已就绪（绿区 {CleanCandidate.FormatBytes(ready.SafeOnlineBytes)}，黄区 {CleanCandidate.FormatBytes(ready.RecycleCandidateBytes)}，蓝区 {CleanCandidate.FormatBytes(ready.OfflineCacheBytes)}，耗时 {ready.ElapsedMs} ms）。";
+                ? (en
+                    ? $"{def.LocalizedDisplayName} ready (Strict Read-Only: {CleanCandidate.FormatBytes(ready.DiagnosticBytes)}, 0 deletable, {ready.ElapsedMs} ms)."
+                    : $"{def.DisplayName} 已就绪（严格只读诊断：共盘点 {CleanCandidate.FormatBytes(ready.DiagnosticBytes)}，0 删除候选，耗时 {ready.ElapsedMs} ms）。")
+                : (en
+                    ? $"{def.LocalizedDisplayName} ready (Green {CleanCandidate.FormatBytes(ready.SafeOnlineBytes)}, Yellow {CleanCandidate.FormatBytes(ready.RecycleCandidateBytes)}, Blue {CleanCandidate.FormatBytes(ready.OfflineCacheBytes)}, {ready.ElapsedMs} ms)."
+                    : $"{def.DisplayName} 已就绪（绿区 {CleanCandidate.FormatBytes(ready.SafeOnlineBytes)}，黄区 {CleanCandidate.FormatBytes(ready.RecycleCandidateBytes)}，蓝区 {CleanCandidate.FormatBytes(ready.OfflineCacheBytes)}，耗时 {ready.ElapsedMs} ms）。");
             if (ready.Status == ScanStatus.Partial)
-                msg += $" [部分目录权限受限: {ready.AccessDeniedCount}]";
+                msg += en ? $" [Access restricted: {ready.AccessDeniedCount}]" : $" [部分目录权限受限: {ready.AccessDeniedCount}]";
             UpdateBusyIndicators(msg);
         }
         else
@@ -1017,7 +1065,9 @@ public partial class MainWindow : Window
         _scheduleInstalled = installed;
         _scheduleLoaded = true;
         TxtScheduleStatus.Text = summary;
-        BtnToggleSchedule.Content = installed ? "停用定时任务" : "启用每周定时任务";
+        BtnToggleSchedule.Content = installed
+            ? (Loc.IsEnglish ? "Disable Weekly Task" : "停用定时任务")
+            : (Loc.IsEnglish ? "Enable Weekly Task" : "启用每周定时任务");
     }
 
     // === Instant Non-Blocking Dynamic Zone Switching ===
@@ -1500,24 +1550,33 @@ public partial class MainWindow : Window
 
     private void BtnShowRedlines_Click(object sender, RoutedEventArgs e)
     {
-        string msg =
-            "【七专区引擎级硬红线保护（双层实时校验 + 执行器授权闸门）】\n\n" +
-            "1. Antigravity 专区\n" +
-            "   • 永不触碰：conversations 主对话库、.gemini/config、.env、登录态 Network/LocalStorage/IndexedDB/Service Worker Database、最近 72 小时会话产物。\n\n" +
-            "2. GPT / Codex 专区（ChatGPT 桌面端）\n" +
-            "   • 永不触碰：%USERPROFILE%\\.codex 全目录与全部 SQLite 数据库（仅 O(1) 只读诊断）、MSIX 包目录、runtimes、.codex 全部联接目标及含联接目录。\n\n" +
-            "3. DeepSeek Harness 专区\n" +
-            "   • 永不触碰：.dsh/profiles（含插件联接）、dsh-runtimes、skills 联接、sessions、.credentials.yaml 与登录态。\n\n" +
-            "4. Claude Code 专区（严格只读诊断模式）\n" +
-            "   • 永不触碰：.claude 全目录（含 file-history 编辑回滚副本、shell-snapshots、projects 与凭据），删除候选恒为 0。\n\n" +
-            "5. AI 工具链与模型雷达\n" +
-            "   • 仅 uv / pip / npm 超期纯下载缓存开放绿区清理（跳过 NTFS 联接）；pnpm 硬链接库、Playwright/Puppeteer 与 Hugging Face/Ollama/LM Studio 均严格只读。\n\n" +
-            "6. AI IDE 专区（Cursor / Windsurf / Trae）\n" +
-            "   • 仅顶层离线 Electron 缓存按各 IDE 进程独立加锁开放清理；硬保护 User/globalStorage/state.vscdb、workspaceStorage、扩展目录与 CachedExtensionVSIXs。\n\n" +
-            "7. 本地 AI 生态与虚拟盘雷达（严格只读）\n" +
-            "   • WSL2/Docker ext4.vhdx、Cline/Roo Code/Continue、ComfyUI 与受控只读社区规则包均强制只读（0 删除候选），绝不自动删文件。\n\n" +
-            "8. 通用铁律\n" +
-            "   • 执行器入口强制二次核验 (Zone, Action, Path)；硬保护系统目录与 .ssh/.gnupg/.aws/.kube/Documents/Desktop；全祖先链联接校验；绝不强杀运行中桌面进程。";
+        string msg = Loc.IsEnglish
+            ? "[7-Zone Engine-Authorized Hard Redlines & Dual-Layer Guard]\n\n" +
+              "1. Antigravity: Never touches conversations DB, .gemini/config, .env, auth storage (Network/LocalStorage/IndexedDB/Service Worker Database), or active <72h sessions.\n\n" +
+              "2. GPT / Codex: Never touches %USERPROFILE%\\.codex & SQLite DBs (O(1) telemetry only), MSIX package, runtimes, or .codex junction targets.\n\n" +
+              "3. DeepSeek Harness: Never touches .dsh/profiles, dsh-runtimes, skills junctions, sessions, .credentials.yaml, or auth storage.\n\n" +
+              "4. Claude Code (Strict Read-Only): 0 deletable candidates; protects file-history rollback copies, shell-snapshots, projects & credentials.\n\n" +
+              "5. AI Toolchains: Only expired uv/pip/npm download caches are cleanable (skipping NTFS junctions); pnpm/store, Playwright/Puppeteer, and Hugging Face/Ollama/LM Studio stay strictly read-only.\n\n" +
+              "6. AI IDEs (Cursor / Windsurf / Trae): Only top-level offline Electron caches with per-IDE process locking; hard-protects User, state.vscdb, workspaceStorage, extensions & CachedExtensionVSIXs.\n\n" +
+              "7. Local AI / VHDX (Strict Read-Only): WSL2/Docker ext4.vhdx, Cline/Roo Code/Continue, ComfyUI, and controlled read-only community packs (0 deletions).\n\n" +
+              "8. Global Iron Laws: Unified executor gate validates (Zone, Action, Path); OS roots & .ssh/.gnupg/.aws/.kube/Documents/Desktop permanently protected; full ancestor-chain junction checks; zero process killing."
+            : "【七专区引擎级硬红线保护（双层实时校验 + 执行器授权闸门）】\n\n" +
+              "1. Antigravity 专区\n" +
+              "   • 永不触碰：conversations 主对话库、.gemini/config、.env、登录态 Network/LocalStorage/IndexedDB/Service Worker Database、最近 72 小时会话产物。\n\n" +
+              "2. GPT / Codex 专区（ChatGPT 桌面端）\n" +
+              "   • 永不触碰：%USERPROFILE%\\.codex 全目录与全部 SQLite 数据库（仅 O(1) 只读诊断）、MSIX 包目录、runtimes、.codex 全部联接目标及含联接目录。\n\n" +
+              "3. DeepSeek Harness 专区\n" +
+              "   • 永不触碰：.dsh/profiles（含插件联接）、dsh-runtimes、skills 联接、sessions、.credentials.yaml 与登录态。\n\n" +
+              "4. Claude Code 专区（严格只读诊断模式）\n" +
+              "   • 永不触碰：.claude 全目录（含 file-history 编辑回滚副本、shell-snapshots、projects 与凭据），删除候选恒为 0。\n\n" +
+              "5. AI 工具链与模型雷达\n" +
+              "   • 仅 uv / pip / npm 超期纯下载缓存开放绿区清理（跳过 NTFS 联接）；pnpm 硬链接库、Playwright/Puppeteer 与 Hugging Face/Ollama/LM Studio 均严格只读。\n\n" +
+              "6. AI IDE 专区（Cursor / Windsurf / Trae）\n" +
+              "   • 仅顶层离线 Electron 缓存按各 IDE 进程独立加锁开放清理；硬保护 User/globalStorage/state.vscdb、workspaceStorage、扩展目录与 CachedExtensionVSIXs。\n\n" +
+              "7. 本地 AI 生态与虚拟盘雷达（严格只读）\n" +
+              "   • WSL2/Docker ext4.vhdx、Cline/Roo Code/Continue、ComfyUI 与受控只读社区规则包均强制只读（0 删除候选），绝不自动删文件。\n\n" +
+              "8. 通用铁律\n" +
+              "   • 执行器入口强制二次核验 (Zone, Action, Path)；硬保护系统目录与 .ssh/.gnupg/.aws/.kube/Documents/Desktop；全祖先链联接校验；绝不强杀运行中桌面进程。";
         MessageBox.Show(this, msg, Loc.T("BtnRedlines"), MessageBoxButton.OK, MessageBoxImage.Information);
     }
 

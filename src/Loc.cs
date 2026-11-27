@@ -21,7 +21,7 @@ public static class Loc
 
     private static readonly Dictionary<string, string> Zh = new(StringComparer.Ordinal)
     {
-        ["AppTitle"] = "AI 清理助手 v3.2 · 跨平台 AI 生态安全维护",
+        ["AppTitle"] = "AI 清理助手 v3.2.1 · 跨平台 AI 生态安全维护",
         ["BrandName"] = "AI 清理助手",
         ["BrandSub"] = "AI 生态 7 专区 · 零干扰安全维护",
         ["ChooseZone"] = "选择清理 / 诊断专区",
@@ -84,9 +84,9 @@ public static class Loc
 
     private static readonly Dictionary<string, string> En = new(StringComparer.Ordinal)
     {
-        ["AppTitle"] = "AI Cleaner v3.2 · Safe Windows AI Ecosystem Maintenance",
+        ["AppTitle"] = "AI Cleaner v3.2.1 · Safe Windows AI Ecosystem Maintenance",
         ["BrandName"] = "AI Cleaner",
-        ["BrandSub"] = "7-Zone AI Ecosystem · Zero-Disruption Safety",
+        ["BrandSub"] = "7 AI Zones · Zero-Disruption",
         ["ChooseZone"] = "Select Cleanup / Diagnostic Zone",
         ["BtnOverview"] = "Cross-Zone Overview · Top 10",
         ["BtnScanAll"] = "Scan All Zones",
@@ -102,17 +102,17 @@ public static class Loc
         ["BtnRescan"] = "Rescan Zone",
         ["BtnExport"] = "Export Report",
         ["BtnLangToggle"] = "中文",
-        ["KpiSafeTitle"] = "Green · Safe Online Clean (Live Apps OK)",
-        ["KpiRecycleTitle"] = "Yellow · Recycle Bin Slimming (Reversible)",
-        ["KpiOfflineTitle"] = "Blue · Offline Caches (Clean After Exit)",
-        ["KpiDiagTitle"] = "Read-Only Radar · Diagnostics (Never Auto-Deleted)",
+        ["KpiSafeTitle"] = "Green · Safe Online (Live)",
+        ["KpiRecycleTitle"] = "Yellow · Recycle Bin (Undo)",
+        ["KpiOfflineTitle"] = "Blue · Offline Cache (Exit)",
+        ["KpiDiagTitle"] = "Read-Only Radar (0 Delete)",
         ["BreakdownLabel"] = "Space Split",
         ["FilterAll"] = "All",
         ["FilterSafe"] = "Safe Online",
         ["FilterRecycle"] = "Recycle Bin",
         ["FilterOffline"] = "Offline Cache",
         ["FilterProtected"] = "Protected/Radar",
-        ["SearchPlaceholder"] = "Search name, path, or reason...",
+        ["SearchPlaceholder"] = "Search name, path, reason...",
         ["SortDefault"] = "Tier / Size",
         ["SortSize"] = "Largest First",
         ["SortTime"] = "Oldest Modified",
@@ -126,7 +126,7 @@ public static class Loc
         ["BtnCleanZero"] = "Clean Selected (0)",
         ["ColSelect"] = "Sel",
         ["ColTier"] = "Safety Tier",
-        ["ColItemPath"] = "Item & Path (Double-click open · Right-click whitelist)",
+        ["ColItemPath"] = "Item & Path (Double-click)",
         ["ColSize"] = "Size",
         ["ColFiles"] = "Files",
         ["ColModified"] = "Modified",

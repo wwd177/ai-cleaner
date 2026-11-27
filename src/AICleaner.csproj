@@ -10,7 +10,7 @@
     <RootNamespace>AICleaner</RootNamespace>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>3.2.0</Version>
+    <Version>3.2.1</Version>
     <Product>AI 清理助手</Product>
     <NoWarn>$(NoWarn);WFO0003</NoWarn>
   </PropertyGroup>

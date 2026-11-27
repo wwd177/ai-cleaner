@@ -1,7 +1,7 @@
 <Window x:Class="AICleaner.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="AI 清理助手 v3.2 · 跨平台 AI 生态安全维护"
+        Title="AI 清理助手 v3.2.1 · 跨平台 AI 生态安全维护"
         Width="1280" Height="840" MinWidth="1060" MinHeight="680"
         WindowStartupLocation="CenterScreen"
         Background="#EAF3FF"
@@ -130,7 +130,7 @@
                                     <TextBlock x:Name="TxtBrandName" Text="AI 清理助手" FontSize="18" FontWeight="Bold" Foreground="{StaticResource InkPrimary}"/>
                                     <Border Background="#E2F0FF" BorderBrush="#B4D5FA" BorderThickness="1"
                                             CornerRadius="5" Padding="5,1" Margin="7,0,0,0" VerticalAlignment="Center">
-                                        <TextBlock Text="v3.2" FontSize="10.5" FontWeight="Bold" Foreground="#1D4ED8"/>
+                                        <TextBlock Text="v3.2.1" FontSize="10.5" FontWeight="Bold" Foreground="#1D4ED8"/>
                                     </Border>
                                 </StackPanel>
                                 <TextBlock x:Name="TxtBrandSub" Text="AI 生态 7 专区 · 零干扰安全维护" FontSize="11.5" Foreground="{StaticResource InkMuted}" Margin="0,1.5,0,0"/>
@@ -431,7 +431,7 @@
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <Path Data="M7,2 A5,5 0 1 1 2,7 M7,4 V7 L9.2,8.5" Stroke="#0284C7" StrokeThickness="1.6"
                                   Width="14" Height="14" Stretch="Uniform" Margin="0,0,8,0" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                            <TextBlock Text="每周自动维护 (CodexSafeTempCleanup)：" FontSize="12.5" FontWeight="SemiBold" Foreground="#0369A1"/>
+                            <TextBlock x:Name="TxtSchedulePrefix" Text="每周自动维护 (CodexSafeTempCleanup)：" FontSize="12.5" FontWeight="SemiBold" Foreground="#0369A1"/>
                             <TextBlock x:Name="TxtScheduleStatus" Text="读取状态中..." FontSize="12.5" Foreground="{StaticResource InkPrimary}"/>
                         </StackPanel>
                         <Button Grid.Column="1" x:Name="BtnToggleSchedule" Content="停用定时任务"
@@ -602,12 +602,12 @@
                                   MouseDoubleClick="GridCandidates_MouseDoubleClick">
                             <DataGrid.ContextMenu>
                                 <ContextMenu FontFamily="{StaticResource AppFont}" FontSize="12.5">
-                                    <MenuItem Header="透视大文件 (空间雷达 · 只读)" Click="BtnSpaceMap_Click"/>
-                                    <MenuItem Header="在资源管理器中打开" Click="MenuOpenFolder_Click"/>
-                                    <MenuItem Header="复制完整路径" Click="MenuCopyPath_Click"/>
+                                    <MenuItem x:Name="MenuCtxRadar" Header="透视大文件 (空间雷达 · 只读)" Click="BtnSpaceMap_Click"/>
+                                    <MenuItem x:Name="MenuCtxOpen" Header="在资源管理器中打开" Click="MenuOpenFolder_Click"/>
+                                    <MenuItem x:Name="MenuCtxCopy" Header="复制完整路径" Click="MenuCopyPath_Click"/>
                                     <Separator/>
-                                    <MenuItem Header="加入永久保留白名单" Click="MenuAddWhitelist_Click"/>
-                                    <MenuItem Header="移出白名单保护" Click="MenuRemoveWhitelist_Click"/>
+                                    <MenuItem x:Name="MenuCtxAddWl" Header="加入永久保留白名单" Click="MenuAddWhitelist_Click"/>
+                                    <MenuItem x:Name="MenuCtxRemWl" Header="移出白名单保护" Click="MenuRemoveWhitelist_Click"/>
                                 </ContextMenu>
                             </DataGrid.ContextMenu>
                             <DataGrid.Columns>

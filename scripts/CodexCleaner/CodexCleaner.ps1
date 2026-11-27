@@ -210,12 +210,16 @@ if ($WorkspaceMinAgeDays -lt 3) {
 
 function Normalize-PathKey([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
+    if ($Path.IndexOf([char]0) -ge 0) { return '' }
     try {
-        $full = [System.IO.Path]::GetFullPath($Path)
+        $full = [System.IO.Path]::GetFullPath($Path.Trim())
+        $cleaned = $full.TrimEnd('\', '/').ToLowerInvariant()
+        if ($cleaned.Length -le 3) { return '' }
+        return $cleaned
     } catch {
-        $full = $Path
+        # Fail-closed: unnormalizable path returns empty string, which Test-IsProtectedPath treats as protected
+        return ''
     }
-    return $full.TrimEnd('\', '/').ToLowerInvariant()
 }
 
 # Hardcoded Red-Zone Protected Subtrees (100% portable + auto-discovered .codex junction targets + config.json extras)
@@ -229,13 +233,32 @@ if (Test-Path -LiteralPath $codexHome -PathType Container) {
     }
 }
 
+$customSiblingProtected = @()
+if (-not [string]::IsNullOrWhiteSpace($TempRoot)) {
+    $tempParent = Split-Path -Parent $TempRoot
+    if (-not [string]::IsNullOrWhiteSpace($tempParent)) {
+        foreach ($sub in @('runtimes', 'native-runtimes', 'app-metadata', 'plugin-staging', 'command-staging')) {
+            $customSiblingProtected += (Join-Path $tempParent $sub)
+        }
+    }
+}
+
 $script:ProtectedSubtrees = @(
     $codexHome,
     (Join-Path $env:LOCALAPPDATA 'OpenAI'),
-    (Join-Path $env:USERPROFILE '.cache\codex-runtimes')
-) + $autoJunctionTargets + $script:ExtraProtectedFromConfig |
+    (Join-Path $env:USERPROFILE '.cache\codex-runtimes'),
+    (Join-Path $env:USERPROFILE '.claude'),
+    (Join-Path $env:USERPROFILE '.claude.json'),
+    (Join-Path $env:USERPROFILE '.ssh'),
+    (Join-Path $env:USERPROFILE '.gnupg'),
+    (Join-Path $env:USERPROFILE '.aws'),
+    (Join-Path $env:USERPROFILE '.kube'),
+    [Environment]::GetFolderPath('MyDocuments'),
+    [Environment]::GetFolderPath('DesktopDirectory')
+) + $autoJunctionTargets + $customSiblingProtected + $script:ExtraProtectedFromConfig |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { Normalize-PathKey $_ } |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     Select-Object -Unique
 
 # Container roots themselves can NEVER be deleted as a whole (only eligible interior items)
@@ -284,9 +307,32 @@ function Test-IsProtectedPath {
 }
 
 function Test-IsReparsePoint([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path)) { return $false }
-    $attr = [System.IO.File]::GetAttributes($Path)
-    return (($attr -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $true }
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) { return $true }
+        $attr = [System.IO.File]::GetAttributes($Path)
+        return (($attr -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+    } catch {
+        # Fail-closed: unverifiable attributes are treated as unsafe
+        return $true
+    }
+}
+
+function Test-HasReparsePointInChain([string]$TargetPath) {
+    $norm = Normalize-PathKey $TargetPath
+    if ([string]::IsNullOrWhiteSpace($norm)) { return $true }
+    try {
+        $curr = [System.IO.Path]::GetFullPath($TargetPath.Trim()).TrimEnd('\', '/')
+        while (-not [string]::IsNullOrEmpty($curr) -and $curr.Length -gt 3) {
+            if (Test-IsReparsePoint $curr) { return $true }
+            $parent = [System.IO.Path]::GetDirectoryName($curr)
+            if ([string]::IsNullOrEmpty($parent)) { break }
+            $curr = $parent.TrimEnd('\', '/')
+        }
+        return $false
+    } catch {
+        return $true
+    }
 }
 
 function Test-FileLocked([string]$FilePath) {
@@ -320,8 +366,8 @@ function Move-ToRecycleBinSafe([string]$TargetPath) {
     if (Test-IsProtectedPath $TargetPath) {
         throw "拒绝操作受保护路径: $TargetPath"
     }
-    if (Test-IsReparsePoint $TargetPath) {
-        throw "拒绝操作目录联接/符号链接: $TargetPath"
+    if (Test-HasReparsePointInChain $TargetPath) {
+        throw "拒绝操作包含目录联接/符号链接的路径链: $TargetPath"
     }
     if (Test-Path -LiteralPath $TargetPath -PathType Container) {
         $stats = [CodexCleanerNative.Scanner]::MeasureDirectory($TargetPath)
@@ -390,8 +436,8 @@ function Invoke-CacheDirFileSweep {
     if (-not (Test-Path -LiteralPath $RootPath -PathType Container)) { return $result }
     $result.exists = $true
 
-    if (Test-IsReparsePoint $RootPath) {
-        # If caller passed a junction itself, refuse to traverse
+    if (Test-HasReparsePointInChain $RootPath) {
+        # Refuse to traverse if root or any ancestor is a junction/symlink
         $result.skippedJunctions++
         return $result
     }
@@ -429,7 +475,7 @@ function Invoke-CacheDirFileSweep {
                         $result.skippedRecent++
                         continue
                     }
-                    if (Test-FileLocked $f.FullName) {
+                    if ($DoApply -and (Test-FileLocked $f.FullName)) {
                         $result.skippedLocked++
                         continue
                     }
@@ -440,8 +486,18 @@ function Invoke-CacheDirFileSweep {
 
                     if ($DoApply) {
                         try {
-                            if (($f.Attributes -band [System.IO.FileAttributes]::ReadOnly) -ne 0) {
-                                $f.Attributes = $f.Attributes -band (-bnot [System.IO.FileAttributes]::ReadOnly)
+                            # Re-verify full ancestor chain + live attributes right before unlink
+                            if (Test-HasReparsePointInChain $f.FullName) {
+                                $result.skippedJunctions++
+                                continue
+                            }
+                            $liveAttr = [System.IO.File]::GetAttributes($f.FullName)
+                            if (($liveAttr -band ([System.IO.FileAttributes]::ReparsePoint -bor [System.IO.FileAttributes]::Directory)) -ne 0) {
+                                $result.skippedJunctions++
+                                continue
+                            }
+                            if (($liveAttr -band [System.IO.FileAttributes]::ReadOnly) -ne 0) {
+                                [System.IO.File]::SetAttributes($f.FullName, ($liveAttr -band (-bnot [System.IO.FileAttributes]::ReadOnly)))
                             }
                             [System.IO.File]::Delete($f.FullName)
                             $result.deletedFiles++

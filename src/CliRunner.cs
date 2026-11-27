@@ -11,7 +11,7 @@ namespace AICleaner;
 public static class CliRunner
 {
     public const string SchemaVersion = "1.0";
-    public const string AppVersion = "3.2.0";
+    public const string AppVersion = "3.2.1";
 
     private const uint AttachParentProcess = 0xFFFFFFFF;
 

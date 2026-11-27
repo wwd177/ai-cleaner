@@ -97,6 +97,18 @@ public static class DiagnosticPackLoader
         return false;
     }
 
+    /// <summary>Returns true only when an installed read-only pack actually resolves to at least one existing target on disk.</summary>
+    public static bool HasAnyMatchingUserPackTarget()
+    {
+        foreach (var dir in new[] { UserPacksDir, BundledPacksDir })
+        {
+            var entries = LoadValidEntriesFromDirectory(dir, out _);
+            if (entries.Any(e => Directory.Exists(e.ResolvedPath) || File.Exists(e.ResolvedPath)))
+                return true;
+        }
+        return false;
+    }
+
     /// <summary>
     /// Resolves a pack path template safely without calling Environment.ExpandEnvironmentVariables
     /// (prevents arbitrary env var exfiltration/injection) and rejects traversal, UNC, OS dirs, and sensitive personal roots.

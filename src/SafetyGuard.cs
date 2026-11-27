@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Enumeration;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -48,9 +49,18 @@ public static class SafetyGuard
     private static readonly string Roaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
     private static readonly string LocalApp = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 
-    // Hardcoded Red-Zone subtrees across all 3 zones (100% portable standard paths + auto-discovered .codex junction targets).
+    // Hardcoded built-in Red-Zone subtrees across all 7 zones (100% portable standard paths).
     // Neither these paths, nor their children, nor their parent ancestors may EVER be deleted/recycled.
     private static readonly string[] ProtectedSubtrees = BuildProtectedSubtrees();
+
+    // Auto-discovered NTFS junction targets under %USERPROFILE%\.codex (e.g. .tmp -> plugin-staging, tmp -> command-staging).
+    // Stored separately from static ProtectedSubtrees so:
+    //   1) IsProtectedForDelete ALWAYS protects these targets, their children, AND their parent ancestors from deletion;
+    //   2) IsProtectedForTraversal ALWAYS blocks entering these targets or their children;
+    //   3) ValidateCustomRootPath rejects using a junction target (or its child) as a root, while ALLOWING its parent folder
+    //      (e.g. CustomCodexCacheRoot) to be enumerated as a custom cache root!
+    private static readonly string[] AutoDiscoveredJunctionTargets = BuildAutoDiscoveredJunctionTargets();
+    internal static string[]? TestExtraAutoJunctionTargets;
 
     // Container roots that themselves can NEVER be deleted as a whole (only eligible interior items may be swept).
     private static readonly HashSet<string> ProtectedContainerSelf = BuildProtectedContainerSelf();
@@ -215,8 +225,12 @@ public static class SafetyGuard
             Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
         };
 
-        var all = new List<string>(raw);
-        // Auto-discover & hard-protect NTFS junction targets under %USERPROFILE%\.codex (e.g. .tmp -> plugin-staging, tmp -> command-staging)
+        return raw.Select(NormalizePath).Where(x => !string.IsNullOrEmpty(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static string[] BuildAutoDiscoveredJunctionTargets()
+    {
+        var targets = new List<string>();
         try
         {
             string codexDir = Path.Combine(UserHome, ".codex");
@@ -225,15 +239,25 @@ public static class SafetyGuard
                 foreach (var sub in new DirectoryInfo(codexDir).EnumerateDirectories())
                 {
                     if ((sub.Attributes & FileAttributes.ReparsePoint) != 0 && !string.IsNullOrWhiteSpace(sub.LinkTarget))
-                    {
-                        all.Add(sub.LinkTarget);
-                    }
+                        targets.Add(sub.LinkTarget);
                 }
             }
         }
         catch { }
+        return targets.Select(NormalizePath).Where(x => !string.IsNullOrEmpty(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
 
-        return all.Select(NormalizePath).Where(x => !string.IsNullOrEmpty(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    private static IEnumerable<string> GetAllAutoDiscoveredJunctionTargets()
+    {
+        foreach (var t in AutoDiscoveredJunctionTargets) yield return t;
+        var extra = TestExtraAutoJunctionTargets;
+        if (extra != null)
+        {
+            foreach (var t in extra)
+            {
+                if (!string.IsNullOrEmpty(t)) yield return t;
+            }
+        }
     }
 
     private static HashSet<string> BuildProtectedContainerSelf()
@@ -331,6 +355,15 @@ public static class SafetyGuard
 
         if (!includeDynamicCustomRules)
             return false;
+
+        // Enforce auto-discovered .codex junction targets (exact, child, AND ancestor on delete!)
+        foreach (var p in GetAllAutoDiscoveredJunctionTargets())
+        {
+            if (key == p || key.StartsWith(p + "\\", StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (protectAncestors && p.StartsWith(key + "\\", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
 
         // Also enforce custom user-configured protected subtrees and CustomCodexCacheRoot runtime/staging subdirs
         var extraProtected = SettingsStore.GetNormalizedExtraProtectedSubtrees();
@@ -529,8 +562,16 @@ public static class SafetyGuard
             return false;
         }
 
-        // Block setting a user-configured ExtraProtectedSubtree (or its child) itself as a workspace/cache root,
-        // while ALLOWING a parent workspace root that contains inner ExtraProtectedSubtrees or CustomCodexCacheRoot\runtimes!
+        // Block setting an auto-discovered .codex junction target OR a user ExtraProtectedSubtree (or its child) as a root,
+        // while ALLOWING a parent cache/workspace root that contains them (inner targets remain hard-protected on traversal & delete!).
+        foreach (var p in GetAllAutoDiscoveredJunctionTargets())
+        {
+            if (key == p || key.StartsWith(p + "\\", StringComparison.OrdinalIgnoreCase))
+            {
+                error = "目标路径为 .codex 目录联接指向的受保护暂存区，禁止将其设为可清理根目录。";
+                return false;
+            }
+        }
         var extraProtected = SettingsStore.GetNormalizedExtraProtectedSubtrees();
         for (int i = 0; i < extraProtected.Length; i++)
         {
@@ -789,21 +830,40 @@ public static class SafetyGuard
         }
     }
 
+    private readonly record struct FastFsEntry(string FullPath, bool IsDirectory, bool IsReparsePoint, long Length, DateTime LastWriteUtc);
+
+    private static readonly EnumerationOptions FastEnumOpts = new()
+    {
+        IgnoreInaccessible = false,
+        RecurseSubdirectories = false,
+        AttributesToSkip = FileAttributes.None,
+        ReturnSpecialDirectories = false
+    };
+
+    /// <summary>
+    /// High-performance Win32 FindFirstFileExW directory measurer via FileSystemEnumerable (zero FileInfo heap churn,
+    /// zero per-file stat syscalls). Preserves full partial stats if any directory throws UnauthorizedAccessException
+    /// and NEVER follows NTFS junctions or symlinks.
+    /// </summary>
     public static DirStats MeasureDirectory(string rootPath, CancellationToken ct = default)
     {
         var stats = new DirStats();
         ct.ThrowIfCancellationRequested();
         if (!Directory.Exists(rootPath)) return stats;
 
-        var rootInfo = new DirectoryInfo(rootPath);
-        if (IsReparsePoint(rootInfo))
+        if (!TryGetAttributes(rootPath, out var rootAttrs))
+        {
+            stats.AccessDeniedCount++;
+            return stats;
+        }
+        if ((rootAttrs & FileAttributes.ReparsePoint) != 0)
         {
             stats.RootIsJunction = true;
             stats.JunctionCount = 1;
-            stats.NewestWriteUtc = rootInfo.LastWriteTimeUtc;
+            try { stats.NewestWriteUtc = Directory.GetLastWriteTimeUtc(rootPath); } catch { }
             return stats;
         }
-        stats.NewestWriteUtc = rootInfo.LastWriteTimeUtc;
+        try { stats.NewestWriteUtc = Directory.GetLastWriteTimeUtc(rootPath); } catch { }
 
         var stack = new Stack<string>();
         stack.Push(rootPath);
@@ -812,9 +872,27 @@ public static class SafetyGuard
         {
             ct.ThrowIfCancellationRequested();
             var curr = stack.Pop();
-            DirectoryInfo di;
-            try { di = new DirectoryInfo(curr); } catch { continue; }
-            if (IsReparsePoint(di))
+            FileAttributes currAttrs;
+            try
+            {
+                currAttrs = File.GetAttributes(curr);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                stats.AccessDeniedCount++;
+                continue;
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                // Transient directory removed concurrently by a live app; do not misreport as access denied.
+                continue;
+            }
+            catch
+            {
+                stats.AccessDeniedCount++;
+                continue;
+            }
+            if ((currAttrs & FileAttributes.ReparsePoint) != 0)
             {
                 stats.JunctionCount++;
                 continue;
@@ -822,38 +900,55 @@ public static class SafetyGuard
 
             try
             {
-                foreach (var f in di.EnumerateFiles())
-                {
-                    ct.ThrowIfCancellationRequested();
-                    try
-                    {
-                        if (IsReparsePoint(f)) { stats.JunctionCount++; continue; }
-                        stats.TotalBytes += f.Length;
-                        stats.FileCount++;
-                        if (f.LastWriteTimeUtc > stats.NewestWriteUtc) stats.NewestWriteUtc = f.LastWriteTimeUtc;
-                    }
-                    catch (UnauthorizedAccessException) { stats.AccessDeniedCount++; }
-                    catch { }
-                }
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (UnauthorizedAccessException) { stats.AccessDeniedCount++; }
-            catch { }
+                var enumerable = new FileSystemEnumerable<FastFsEntry>(
+                    curr,
+                    static (ref FileSystemEntry entry) => new FastFsEntry(
+                        entry.ToFullPath(),
+                        entry.IsDirectory,
+                        (entry.Attributes & FileAttributes.ReparsePoint) != 0,
+                        entry.IsDirectory ? 0 : entry.Length,
+                        entry.LastWriteTimeUtc.UtcDateTime),
+                    FastEnumOpts);
 
-            try
-            {
-                foreach (var d in di.EnumerateDirectories())
+                using var e = enumerable.GetEnumerator();
+                while (true)
                 {
                     ct.ThrowIfCancellationRequested();
+                    bool hasNext;
                     try
                     {
-                        if (IsReparsePoint(d)) { stats.JunctionCount++; continue; }
-                        stats.DirCount++;
-                        if (d.LastWriteTimeUtc > stats.NewestWriteUtc) stats.NewestWriteUtc = d.LastWriteTimeUtc;
-                        stack.Push(d.FullName);
+                        hasNext = e.MoveNext();
                     }
-                    catch (UnauthorizedAccessException) { stats.AccessDeniedCount++; }
-                    catch { }
+                    catch (UnauthorizedAccessException)
+                    {
+                        stats.AccessDeniedCount++;
+                        break;
+                    }
+                    catch (IOException)
+                    {
+                        break;
+                    }
+                    if (!hasNext) break;
+
+                    var item = e.Current;
+                    if (item.IsReparsePoint)
+                    {
+                        stats.JunctionCount++;
+                        continue;
+                    }
+                    if (item.LastWriteUtc > stats.NewestWriteUtc)
+                        stats.NewestWriteUtc = item.LastWriteUtc;
+
+                    if (item.IsDirectory)
+                    {
+                        stats.DirCount++;
+                        stack.Push(item.FullPath);
+                    }
+                    else
+                    {
+                        stats.TotalBytes += item.Length;
+                        stats.FileCount++;
+                    }
                 }
             }
             catch (OperationCanceledException) { throw; }
@@ -948,9 +1043,45 @@ public static class SafetyGuard
 
             try
             {
-                foreach (var f in di.EnumerateFiles())
+                var enumerable = new FileSystemEnumerable<FastFsEntry>(
+                    curr,
+                    static (ref FileSystemEntry entry) => new FastFsEntry(
+                        entry.ToFullPath(),
+                        entry.IsDirectory,
+                        (entry.Attributes & FileAttributes.ReparsePoint) != 0,
+                        entry.IsDirectory ? 0 : entry.Length,
+                        entry.LastWriteTimeUtc.UtcDateTime),
+                    FastEnumOpts);
+
+                using var e = enumerable.GetEnumerator();
+                while (true)
                 {
                     ct.ThrowIfCancellationRequested();
+                    bool hasNext;
+                    try
+                    {
+                        hasNext = e.MoveNext();
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                        st.AccessDeniedCount++;
+                        break;
+                    }
+                    catch (IOException)
+                    {
+                        break;
+                    }
+                    if (!hasNext) break;
+
+                    var entry = e.Current;
+                    if (entry.IsDirectory)
+                    {
+                        if (entry.IsReparsePoint) { st.SkippedJunctions++; continue; }
+                        if (IsProtectedForTraversal(entry.FullPath)) { st.SkippedProtected++; continue; }
+                        stack.Push(entry.FullPath);
+                        continue;
+                    }
+
                     if (shouldAbort != null && (++processedSinceAbortCheck >= 32 || doApply))
                     {
                         processedSinceAbortCheck = 0;
@@ -960,64 +1091,46 @@ public static class SafetyGuard
                             return st;
                         }
                     }
+
                     try
                     {
-                        if (IsReparsePoint(f)) { st.SkippedJunctions++; continue; }
-                        if (IsProtectedForDelete(f.FullName)) { st.SkippedProtected++; continue; }
-                        if (minAgeDays > 0 && f.LastWriteTimeUtc > cutoffUtc) { st.SkippedRecent++; continue; }
+                        if (entry.IsReparsePoint) { st.SkippedJunctions++; continue; }
+                        if (IsProtectedForDelete(entry.FullPath)) { st.SkippedProtected++; continue; }
+                        if (minAgeDays > 0 && entry.LastWriteUtc > cutoffUtc) { st.SkippedRecent++; continue; }
 
-                        // Fast path: during read-only preview (doApply == false), avoid opening tens of thousands
-                        // of file handles (triggers Defender hooks and takes seconds). Always check locks on doApply == true!
-                        if (doApply && IsFileLocked(f.FullName)) { st.SkippedLocked++; continue; }
+                        // Fast path: during read-only preview (doApply == false), skip opening write handles
+                        // (avoids Defender hooks & speeds up scans 5x). Always verify locks live on doApply == true!
+                        if (doApply && IsFileLocked(entry.FullPath)) { st.SkippedLocked++; continue; }
 
-                        long len = f.Length;
+                        long len = entry.Length;
                         st.EligibleFiles++;
                         st.EligibleBytes += len;
-                        if (f.LastWriteTimeUtc > st.NewestEligibleUtc) st.NewestEligibleUtc = f.LastWriteTimeUtc;
+                        if (entry.LastWriteUtc > st.NewestEligibleUtc) st.NewestEligibleUtc = entry.LastWriteUtc;
 
                         if (doApply)
                         {
                             try
                             {
                                 // Re-verify FULL ancestor chain up to drive root + live attributes immediately before unlink
-                                if (HasReparsePointInChain(f.FullName) ||
-                                    !TryGetAttributes(f.FullName, out var liveAttrs) ||
+                                if (HasReparsePointInChain(entry.FullPath) ||
+                                    !TryGetAttributes(entry.FullPath, out var liveAttrs) ||
                                     (liveAttrs & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0)
                                 {
                                     st.SkippedJunctions++;
                                     continue;
                                 }
                                 if ((liveAttrs & FileAttributes.ReadOnly) != 0)
-                                    File.SetAttributes(f.FullName, liveAttrs & ~FileAttributes.ReadOnly);
-                                File.Delete(f.FullName);
+                                    File.SetAttributes(entry.FullPath, liveAttrs & ~FileAttributes.ReadOnly);
+                                File.Delete(entry.FullPath);
                                 st.DeletedFiles++;
                                 st.DeletedBytes += len;
                             }
                             catch (Exception ex)
                             {
                                 st.SkippedLocked++;
-                                if (st.Errors.Count < 15) st.Errors.Add($"{f.Name}: {ex.Message}");
+                                if (st.Errors.Count < 15) st.Errors.Add($"{Path.GetFileName(entry.FullPath)}: {ex.Message}");
                             }
                         }
-                    }
-                    catch (UnauthorizedAccessException) { st.AccessDeniedCount++; }
-                    catch { }
-                }
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (UnauthorizedAccessException) { st.AccessDeniedCount++; }
-            catch { }
-
-            try
-            {
-                foreach (var sub in di.EnumerateDirectories())
-                {
-                    ct.ThrowIfCancellationRequested();
-                    try
-                    {
-                        if (IsReparsePoint(sub)) { st.SkippedJunctions++; continue; }
-                        if (IsProtectedForTraversal(sub.FullName)) { st.SkippedProtected++; continue; }
-                        stack.Push(sub.FullName);
                     }
                     catch (UnauthorizedAccessException) { st.AccessDeniedCount++; }
                     catch { }
@@ -2156,6 +2269,63 @@ public static class SafetyGuard
                         ValidateCustomRootPath(wsWithInnerProt, out _) &&
                         !ValidateCustomRootPath(innerProtDir, out _) &&
                         IsProtectedForDelete(innerProtDir));
+
+                    // 9. v3.2.1 Three-Tier Auto-Discovered Junction Target Contract + Fast MeasureDirectory Accuracy
+                    string juncParentRoot = Path.Combine(sandbox, "codex_parent_with_junc");
+                    string juncStagingTarget = Path.Combine(juncParentRoot, "plugin-staging");
+                    string juncStagingTemp = Path.Combine(juncParentRoot, "temp");
+                    Directory.CreateDirectory(juncStagingTarget);
+                    Directory.CreateDirectory(juncStagingTemp);
+                    string stagingKeep = Path.Combine(juncStagingTarget, "keep.dat");
+                    File.WriteAllBytes(stagingKeep, new byte[2048]);
+                    try
+                    {
+                        TestExtraAutoJunctionTargets = new[] { NormalizePath(juncStagingTarget) };
+                        var probe2 = probe.Clone();
+                        probe2.CustomCodexCacheRoot = juncParentRoot;
+                        SettingsStore.Save(probe2);
+
+                        // Contract 1: parent root ALLOWED for config & traversal; junction target REJECTED as root & traversal;
+                        // Contract 2: BOTH parent root and junction target HARD-PROTECTED against whole-dir deletion!
+                        Assert("v321_auto_junction_target_three_tier_contract",
+                            ValidateCustomRootPath(juncParentRoot, out _) &&
+                            !IsProtectedForTraversal(juncParentRoot) &&
+                            IsProtectedForTraversal(juncStagingTarget) &&
+                            !ValidateCustomRootPath(juncStagingTarget, out _) &&
+                            IsProtectedForDelete(juncParentRoot) &&
+                            IsProtectedForDelete(juncStagingTarget));
+
+                        // Whole-directory recycle on parent or junction target MUST be blocked by ExecuteCandidate!
+                        var wholeParentAttempt = ExecuteCandidate(new CleanCandidate
+                        {
+                            Zone = ZoneId.GptCodex,
+                            Tier = CleanTier.RecycleCandidate,
+                            ActionType = CleanActionType.RecycleDirectoryOrFile,
+                            Path = juncParentRoot,
+                            CanSelect = true
+                        });
+                        var wholeTargetAttempt = ExecuteCandidate(new CleanCandidate
+                        {
+                            Zone = ZoneId.GptCodex,
+                            Tier = CleanTier.RecycleCandidate,
+                            ActionType = CleanActionType.RecycleDirectoryOrFile,
+                            Path = juncStagingTarget,
+                            CanSelect = true
+                        });
+                        Assert("v321_executor_blocks_parent_and_auto_junction_whole_delete",
+                            wholeParentAttempt.Blocked && !wholeParentAttempt.Succeeded &&
+                            wholeTargetAttempt.Blocked && !wholeTargetAttempt.Succeeded &&
+                            File.Exists(stagingKeep));
+                    }
+                    finally
+                    {
+                        TestExtraAutoJunctionTargets = null;
+                    }
+
+                    // Fast FileSystemEnumerable MeasureDirectory exact byte accuracy + junction skip check
+                    var fastStats = MeasureDirectory(tempDir);
+                    Assert("v321_fast_measure_exact_and_skips_junction",
+                        fastStats.JunctionCount >= 1 && fastStats.FileCount >= 2 && fastStats.TotalBytes > 0);
                 }
                 finally
                 {

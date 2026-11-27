@@ -212,13 +212,13 @@ public sealed class CleanCandidate : INotifyPropertyChanged
             if (Loc.IsEnglish)
             {
                 if (IsUserWhitelisted) return "Whitelist";
-                if (IsReadOnlyDiagnostic) return "Read-Only Radar";
+                if (IsReadOnlyDiagnostic) return "Read-Only";
                 return Tier switch
                 {
                     CleanTier.SafeOnline => "Green · Safe",
-                    CleanTier.RecycleCandidate => IsRecommended ? "Yellow · Reco" : "Yellow · Recycle",
-                    CleanTier.OfflineCache => CanSelect ? "Blue · Offline" : "Locked · Running",
-                    CleanTier.ProtectedSkipped => "Red · Protected",
+                    CleanTier.RecycleCandidate => IsRecommended ? "Yellow · Reco" : "Yellow · Bin",
+                    CleanTier.OfflineCache => CanSelect ? "Blue · Offline" : "Locked · Busy",
+                    CleanTier.ProtectedSkipped => "Red · Locked",
                     _ => ""
                 };
             }
@@ -358,9 +358,10 @@ public sealed class CleanRunAudit
     public string DisplayTime =>
         DateTime.TryParse(Timestamp, out var dt) ? dt.ToString("yyyy-MM-dd HH:mm:ss") : Timestamp;
     public string FreedText => CleanCandidate.FormatBytes(TotalFreedBytes);
-    public string ZoneLabel => ZoneCatalog.GetByNameOrSlug(Zone)?.DisplayName ?? Zone;
-    public string SummaryLine =>
-        $"成功 {Outcomes.Count(o => o.Succeeded)} 项 · 跳过/拦截 {Outcomes.Count(o => o.Blocked)} 项 · 释放 {FreedText}";
+    public string ZoneLabel => ZoneCatalog.GetByNameOrSlug(Zone)?.LocalizedDisplayName ?? Zone;
+    public string SummaryLine => Loc.IsEnglish
+        ? $"Succeeded {Outcomes.Count(o => o.Succeeded)} · Blocked/Skipped {Outcomes.Count(o => o.Blocked)} · Freed {FreedText}"
+        : $"成功 {Outcomes.Count(o => o.Succeeded)} 项 · 跳过/拦截 {Outcomes.Count(o => o.Blocked)} 项 · 释放 {FreedText}";
 }
 
 public sealed class SpaceMapEntry
@@ -375,12 +376,16 @@ public sealed class SpaceMapEntry
     public DateTime LastWriteLocal { get; set; }
     public double ShareRatio { get; set; } // 0..1
 
-    public string TypeBadge => IsReparsePoint ? "联接" : (IsDirectory ? "目录" : "文件");
-    public string SizeText => IsReparsePoint ? "联接跳过" : CleanCandidate.FormatBytes(SizeBytes);
+    public string TypeBadge => IsReparsePoint
+        ? (Loc.IsEnglish ? "Link" : "联接")
+        : (IsDirectory ? (Loc.IsEnglish ? "Dir" : "目录") : (Loc.IsEnglish ? "File" : "文件"));
+    public string SizeText => IsReparsePoint ? (Loc.IsEnglish ? "Skipped" : "联接跳过") : CleanCandidate.FormatBytes(SizeBytes);
     public string ShareText => IsReparsePoint ? "-" : string.Format(CultureInfo.InvariantCulture, "{0:F1}%", ShareRatio * 100.0);
     public double BarWidth => Math.Max(4, Math.Min(112, ShareRatio * 112.0));
     public string LastWriteText => LastWriteLocal == DateTime.MinValue ? "-" : LastWriteLocal.ToString("yyyy-MM-dd HH:mm");
-    public string ProtectionNote => IsReparsePoint ? "NTFS 联接（禁止穿越）" : (IsProtected ? "红区/白名单保护" : "");
+    public string ProtectionNote => IsReparsePoint
+        ? (Loc.IsEnglish ? "NTFS Junction (Skipped)" : "NTFS 联接（禁止穿越）")
+        : (IsProtected ? (Loc.IsEnglish ? "Redline / Whitelisted" : "红区/白名单保护") : "");
 }
 
 public sealed class ZoneSidebarItem : INotifyPropertyChanged

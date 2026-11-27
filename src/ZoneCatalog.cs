@@ -215,7 +215,9 @@ public static class ZoneCatalog
                 Directory.Exists(Path.Combine(LocalApp, @"Docker\wsl")) ||
                 Directory.Exists(Path.Combine(LocalApp, "wsl")) ||
                 Directory.Exists(Path.Combine(UserHome, "ComfyUI")) ||
-                DiagnosticPackLoader.HasAnyInstalledPacks(),
+                Directory.Exists(Path.Combine(Roaming, @"Code\User\globalStorage\saoudrizwan.claude-dev")) ||
+                Directory.Exists(Path.Combine(Roaming, @"Code\User\globalStorage\rooveterinaryinc.roo-cline")) ||
+                DiagnosticPackLoader.HasAnyMatchingUserPackTarget(),
             ResolveDefaultRadarPath = _ =>
             {
                 foreach (var p in new[]
