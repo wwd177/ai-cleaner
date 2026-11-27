@@ -1,7 +1,7 @@
 ﻿# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
 
 PackageIdentifier: wwd177.AICleaner
-PackageVersion: 3.2.0
+PackageVersion: 3.2.1
 PackageLocale: en-US
 Publisher: wwd177
 PublisherUrl: https://github.com/wwd177/ai-cleaner

@@ -1,5 +1,5 @@
 ﻿{
-    "version":  "3.2.0",
+    "version":  "3.2.1",
     "description":  "Safe Windows AI ecosystem disk cleaner \u0026 space diagnostic radar (Antigravity, GPT/Codex, DeepSeek Harness, Claude Code, AI IDEs, Toolchains \u0026 WSL2/VHDX).",
     "homepage":  "https://github.com/wwd177/ai-cleaner",
     "license":  "MIT",
@@ -9,8 +9,8 @@
               ],
     "architecture":  {
                          "64bit":  {
-                                       "url":  "https://github.com/wwd177/ai-cleaner/releases/download/v3.2.0/AICleaner-win-x64.zip",
-                                       "hash":  "b94fdbabd248f0eb6fa2fb466cba3eb7c869c9bb8b5eddd64eee437fa0a3cf30"
+                                       "url":  "https://github.com/wwd177/ai-cleaner/releases/download/v3.2.1/AICleaner-win-x64.zip",
+                                       "hash":  "b7ae2ecd1f94de5c27f2e32d93890f1582849d1219e9da9b00f467be185db979"
                                    }
                      },
     "bin":  "AICleaner.exe",
