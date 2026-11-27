@@ -172,6 +172,40 @@ public static class SafetyGuard
             Path.Combine(UserHome, @".ollama"),
             Path.Combine(UserHome, @".cache\lm-studio"),
 
+            // === AI IDEs Red-Zone (Cursor / Windsurf / Trae: User settings, auth, extensions, CachedExtensionVSIXs) ===
+            Path.Combine(UserHome, @".cursor"),
+            Path.Combine(Roaming, @"Cursor\User"),
+            Path.Combine(Roaming, @"Cursor\Network"),
+            Path.Combine(Roaming, @"Cursor\Local Storage"),
+            Path.Combine(Roaming, @"Cursor\Session Storage"),
+            Path.Combine(Roaming, @"Cursor\IndexedDB"),
+            Path.Combine(Roaming, @"Cursor\CachedExtensionVSIXs"),
+            Path.Combine(Roaming, @"Cursor\Preferences"),
+            Path.Combine(Roaming, @"Cursor\Local State"),
+            Path.Combine(UserHome, @".codeium"),
+            Path.Combine(Roaming, @"Windsurf\User"),
+            Path.Combine(Roaming, @"Windsurf\Network"),
+            Path.Combine(Roaming, @"Windsurf\Local Storage"),
+            Path.Combine(Roaming, @"Windsurf\Session Storage"),
+            Path.Combine(Roaming, @"Windsurf\IndexedDB"),
+            Path.Combine(Roaming, @"Windsurf\CachedExtensionVSIXs"),
+            Path.Combine(Roaming, @"Windsurf\Preferences"),
+            Path.Combine(Roaming, @"Windsurf\Local State"),
+            Path.Combine(UserHome, @".trae"),
+            Path.Combine(Roaming, @"Trae\User"),
+            Path.Combine(Roaming, @"Trae\Network"),
+            Path.Combine(Roaming, @"Trae\Local Storage"),
+            Path.Combine(Roaming, @"Trae\Session Storage"),
+            Path.Combine(Roaming, @"Trae\IndexedDB"),
+            Path.Combine(Roaming, @"Trae\CachedExtensionVSIXs"),
+            Path.Combine(Roaming, @"Trae\Preferences"),
+            Path.Combine(Roaming, @"Trae\Local State"),
+
+            // === Local AI Ecosystem & Virtual Disks Read-Only Red-Zone ===
+            Path.Combine(UserHome, @".continue"),
+            Path.Combine(LocalApp, @"Docker\wsl"),
+            Path.Combine(LocalApp, @"wsl"),
+
             // === Global User Personal & Credential Defense-in-Depth Redlines ===
             Path.Combine(UserHome, @".ssh"),
             Path.Combine(UserHome, @".gnupg"),
@@ -234,6 +268,9 @@ public static class SafetyGuard
             Path.Combine(Roaming, @"@deepseek-ai\dsh-desktop"),
             Path.Combine(LocalApp, @"@deepseek-aidsh-desktop-updater"),
             Path.Combine(LocalApp, @"@deepseek-aidsh-desktop-updater\pending"),
+            Path.Combine(Roaming, "Cursor"),
+            Path.Combine(Roaming, "Windsurf"),
+            Path.Combine(Roaming, "Trae"),
         };
         return new HashSet<string>(raw.Select(NormalizePath).Where(x => !string.IsNullOrEmpty(x)), StringComparer.OrdinalIgnoreCase);
     }
@@ -682,6 +719,19 @@ public static class SafetyGuard
                     return true;
 
                 reason = "目标路径不在 DeepSeek Harness 专区授权清理清单内，已拦截";
+                return false;
+
+            case ZoneId.AiIdes:
+                if (item.ActionType == CleanActionType.OfflineSweepFilesKeepSkeleton &&
+                    (MatchesAuthorizedOfflineUnder(key, Path.Combine(Roaming, "Cursor"), allowPartitions: false) ||
+                     MatchesAuthorizedOfflineUnder(key, Path.Combine(Roaming, "Windsurf"), allowPartitions: false) ||
+                     MatchesAuthorizedOfflineUnder(key, Path.Combine(Roaming, "Trae"), allowPartitions: false)))
+                    return true;
+                reason = "AI IDE 专区仅授权清理 Cursor / Windsurf / Trae 顶层离线 Electron 缓存，其余路径一律拦截";
+                return false;
+
+            case ZoneId.LocalAiEcosystem:
+                reason = "本地 AI 生态与虚拟盘专区为严格只读诊断模式，禁止执行任何删除";
                 return false;
 
             default:
@@ -1151,6 +1201,38 @@ public static class SafetyGuard
     /// <summary>BitBroom/Mole-style CLI read-only dry-run report across all registered zones.</summary>
     public static string BuildCliDryRunReport() => CliRunner.ExecuteDryRunInternal(asJson: false, singleZone: null).Content;
 
+    /// <summary>Resolves the specific process name(s) that must be stopped before offline-sweeping an item (supports per-IDE isolation in AiIdes).</summary>
+    public static bool IsOfflineTargetProcessRunning(CleanCandidate item, out string runningSummary)
+    {
+        runningSummary = "";
+        if (item.Zone == ZoneId.AiIdes && TryNormalizePath(item.Path, out var norm))
+        {
+            string? targetProc = null;
+            if (TryNormalizePath(Path.Combine(Roaming, "Cursor"), out var cNorm) && norm.StartsWith(cNorm + "\\", StringComparison.OrdinalIgnoreCase))
+                targetProc = "Cursor";
+            else if (TryNormalizePath(Path.Combine(Roaming, "Windsurf"), out var wNorm) && norm.StartsWith(wNorm + "\\", StringComparison.OrdinalIgnoreCase))
+                targetProc = "Windsurf";
+            else if (TryNormalizePath(Path.Combine(Roaming, "Trae"), out var tNorm) && norm.StartsWith(tNorm + "\\", StringComparison.OrdinalIgnoreCase))
+                targetProc = "Trae";
+
+            if (targetProc != null)
+            {
+                var all = GetZoneProcesses(ZoneId.AiIdes);
+                bool run = all.RunningProcesses.Any(p => p.Equals(targetProc, StringComparison.OrdinalIgnoreCase));
+                if (run) runningSummary = targetProc;
+                return run;
+            }
+        }
+
+        var procInfo = GetZoneProcesses(item.Zone);
+        if (procInfo.IsRunning)
+        {
+            runningSummary = $"{string.Join("/", procInfo.RunningProcesses)}（{procInfo.RunningPids.Count} 个进程）";
+            return true;
+        }
+        return false;
+    }
+
     public static CleanItemOutcome ExecuteCandidate(CleanCandidate item)
     {
         var outcome = new CleanItemOutcome
@@ -1220,11 +1302,10 @@ public static class SafetyGuard
             if (item.ActionType == CleanActionType.OfflineSweepFilesKeepSkeleton)
             {
                 // Re-verify process state LIVE before AND periodically during offline cache sweeping!
-                var procInfo = GetZoneProcesses(item.Zone);
-                if (procInfo.IsRunning)
+                if (IsOfflineTargetProcessRunning(item, out var runDesc))
                 {
                     outcome.Blocked = true;
-                    outcome.Message = $"已拦截：{string.Join("/", procInfo.RunningProcesses)} 仍在运行（{procInfo.RunningPids.Count} 个进程），请先正常退出";
+                    outcome.Message = $"已拦截：{runDesc} 仍在运行，请先正常退出";
                     return outcome;
                 }
                 var procWatch = Stopwatch.StartNew();
@@ -1235,7 +1316,7 @@ public static class SafetyGuard
                     long nowMs = procWatch.ElapsedMilliseconds;
                     if (nowMs - lastProcCheckMs < 400) return false;
                     lastProcCheckMs = nowMs;
-                    if (GetZoneProcesses(item.Zone).IsRunning)
+                    if (IsOfflineTargetProcessRunning(item, out _))
                     {
                         restartedMidSweep = true;
                         return true;
@@ -1520,12 +1601,14 @@ public static class SafetyGuard
         var rbStat = GetRecycleBinStats();
         Assert("recycle_bin_query_non_negative", rbStat.TotalBytes >= 0 && rbStat.ItemCount >= 0);
 
-        // 2. Live process detection & ZoneCatalog contract
+        // 2. Live process detection & ZoneCatalog contract (7 zones in v3.2)
         var allProcs = GetAllZoneProcesses();
-        Assert("process_snapshot_has_all_zones", allProcs.Count == ZoneCatalog.All.Count && ZoneCatalog.All.Count == 5);
+        Assert("process_snapshot_has_all_zones", allProcs.Count == ZoneCatalog.All.Count && ZoneCatalog.All.Count == 7);
         Assert("zone_slug_roundtrip",
             ZoneCatalog.TryParseSlug("claude-code", out var parsedCc) && parsedCc == ZoneId.ClaudeCode &&
             ZoneCatalog.TryParseSlug("ai-toolchains", out var parsedTc) && parsedTc == ZoneId.AiToolchains &&
+            ZoneCatalog.TryParseSlug("ai-ides", out var parsedIde) && parsedIde == ZoneId.AiIdes &&
+            ZoneCatalog.TryParseSlug("local-ai-ecosystem", out var parsedLoc) && parsedLoc == ZoneId.LocalAiEcosystem &&
             !ZoneCatalog.TryParseSlug("nonexistent-zone", out _));
 
         // If Antigravity or GPT is currently running on this host, offline clean MUST block!
@@ -1878,6 +1961,163 @@ public static class SafetyGuard
                 using var canDoc = JsonDocument.Parse(canJson);
                 Assert("p1_cli_cancelled_token_returns_exit3",
                     canCode == 3 && canDoc.RootElement.GetProperty("status").GetString() == "cancelled");
+
+                // 8. v3.2 AI IDEs, Local AI / VHDX, Controlled Read-Only Community Packs, i18n & Settings Regression Suite
+                Assert("v32_redline_cursor_user_and_vsix",
+                    IsProtectedPath(Path.Combine(Roaming, @"Cursor\User\globalStorage\state.vscdb")) &&
+                    IsProtectedPath(Path.Combine(Roaming, @"Cursor\User\globalStorage\ext\Cache\foo.bin")) &&
+                    IsProtectedPath(Path.Combine(Roaming, @"Cursor\CachedExtensionVSIXs\ms-python.vsix")) &&
+                    !IsProtectedPath(Path.Combine(Roaming, @"Cursor\Cache\data_0")));
+                Assert("v32_redline_windsurf_trae_auth",
+                    IsProtectedPath(Path.Combine(Roaming, @"Windsurf\Network\Cookies")) &&
+                    IsProtectedPath(Path.Combine(Roaming, @"Windsurf\CachedExtensionVSIXs\pkg.vsix")) &&
+                    IsProtectedPath(Path.Combine(Roaming, @"Trae\User\settings.json")) &&
+                    IsProtectedPath(Path.Combine(LocalApp, @"Docker\wsl\disk\docker_data.vhdx")));
+
+                Assert("v32_ai_ide_executor_allows_only_top_level_cache",
+                    IsAuthorizedExecutionTarget(new CleanCandidate
+                    {
+                        Zone = ZoneId.AiIdes,
+                        Tier = CleanTier.OfflineCache,
+                        ActionType = CleanActionType.OfflineSweepFilesKeepSkeleton,
+                        Path = Path.Combine(Roaming, @"Cursor\Cache"),
+                        CanSelect = true
+                    }, out _) &&
+                    !IsAuthorizedExecutionTarget(new CleanCandidate
+                    {
+                        Zone = ZoneId.AiIdes,
+                        Tier = CleanTier.OfflineCache,
+                        ActionType = CleanActionType.OfflineSweepFilesKeepSkeleton,
+                        Path = Path.Combine(Roaming, @"Cursor\CachedExtensionVSIXs"),
+                        CanSelect = true
+                    }, out _) &&
+                    !IsAuthorizedExecutionTarget(new CleanCandidate
+                    {
+                        Zone = ZoneId.AiIdes,
+                        Tier = CleanTier.OfflineCache,
+                        ActionType = CleanActionType.OfflineSweepFilesKeepSkeleton,
+                        Path = Path.Combine(Roaming, @"Cursor\User\globalStorage\ext\Cache"),
+                        CanSelect = true
+                    }, out _));
+
+                var forcedLocalEco = new CleanCandidate
+                {
+                    Zone = ZoneId.LocalAiEcosystem,
+                    Tier = CleanTier.SafeOnline,
+                    ActionType = CleanActionType.SweepExpiredFiles,
+                    Path = unauthDir,
+                    CanSelect = true
+                };
+                var localEcoOut = ExecuteCandidate(forcedLocalEco);
+                Assert("v32_local_ecosystem_readonly_execute_blocked", localEcoOut.Blocked && !localEcoOut.Succeeded && File.Exists(unauthFile));
+
+                // 8B. WSL2/Docker VHDX O(1) read-only fixture
+                string vhdxRoot = Path.Combine(sandbox, "Docker", "wsl", "disk");
+                Directory.CreateDirectory(vhdxRoot);
+                string vhdxFile = Path.Combine(vhdxRoot, "ext4.vhdx");
+                File.WriteAllBytes(vhdxFile, new byte[16384]);
+                var vhdxHits = ZoneScanner.ScanVhdxFiles(new[] { Path.Combine(sandbox, "Docker", "wsl") });
+                Assert("v32_vhdx_readonly_diagnostic_fixture",
+                    vhdxHits.Count == 1 &&
+                    vhdxHits[0].IsReadOnlyDiagnostic &&
+                    !vhdxHits[0].CanSelect &&
+                    vhdxHits[0].ActionType == CleanActionType.None &&
+                    vhdxHits[0].SizeBytes == 16384 &&
+                    File.Exists(vhdxFile));
+
+                // 8C. Controlled Read-Only Community Diagnostic Pack security suite
+                Assert("v32_pack_rejects_traversal_unc_and_sensitive_paths",
+                    !DiagnosticPackLoader.TryResolveSafePackPath(@"%USERPROFILE%\..\Windows\System32", out _, out _) &&
+                    !DiagnosticPackLoader.TryResolveSafePackPath(@"%USERPROFILE%\.ssh", out _, out _) &&
+                    !DiagnosticPackLoader.TryResolveSafePackPath(@"%USERPROFILE%\Documents\work", out _, out _) &&
+                    !DiagnosticPackLoader.TryResolveSafePackPath(@"%WINDIR%\Temp", out _, out _) &&
+                    !DiagnosticPackLoader.TryResolveSafePackPath(@"\\evil-server\share\ai", out _, out _) &&
+                    !DiagnosticPackLoader.TryResolveSafePackPath(@"%USERPROFILE%", out _, out _));
+
+                string packDir = Path.Combine(sandbox, "packs");
+                Directory.CreateDirectory(packDir);
+                // Malicious pack trying mode="delete" MUST be rejected
+                File.WriteAllText(Path.Combine(packDir, "bad-delete.json"), """
+                {
+                  "schemaVersion": "1.0",
+                  "packId": "evil",
+                  "name": "Evil Pack",
+                  "mode": "delete",
+                  "entries": [{ "id": "x", "title": "Bad", "pathTemplate": "%LOCALAPPDATA%\\Temp" }]
+                }
+                """, new UTF8Encoding(false));
+
+                // Valid read-only pack pointing into this isolated sandbox under %LOCALAPPDATA%\Temp\...
+                string sandboxRelFromLocalApp = Path.GetRelativePath(LocalApp, vhdxRoot);
+                if (!sandboxRelFromLocalApp.StartsWith("..", StringComparison.Ordinal))
+                {
+                    string escapedRel = sandboxRelFromLocalApp.Replace("\\", "\\\\");
+                    File.WriteAllText(Path.Combine(packDir, "good-radar.json"), $$"""
+                    {
+                      "schemaVersion": "1.0",
+                      "packId": "test-radar",
+                      "name": "Test Radar",
+                      "mode": "read-only",
+                      "entries": [
+                        { "id": "ok1", "title": "Isolated Radar Dir", "pathTemplate": "%LOCALAPPDATA%\\{{escapedRel}}", "hint": "test" },
+                        { "id": "bad1", "title": "Escape", "pathTemplate": "%USERPROFILE%\\..\\Windows" }
+                      ]
+                    }
+                    """, new UTF8Encoding(false));
+
+                    var loadedEntries = DiagnosticPackLoader.LoadValidEntriesFromDirectory(packDir, out var packRejects);
+                    var scannedPackCands = DiagnosticPackLoader.ScanPacksInDirectories(new[] { packDir }, out _);
+                    Assert("v32_pack_rejects_delete_mode_and_loads_valid_readonly",
+                        loadedEntries.Count == 1 &&
+                        packRejects.Count >= 2 &&
+                        scannedPackCands.Count == 1 &&
+                        scannedPackCands[0].IsReadOnlyDiagnostic &&
+                        !scannedPackCands[0].CanSelect &&
+                        scannedPackCands[0].ActionType == CleanActionType.None &&
+                        scannedPackCands[0].SizeBytes >= 16384);
+                }
+                else
+                {
+                    // Fallback if %TEMP% is relocated outside %LOCALAPPDATA%: still verify bad-delete pack rejected
+                    var loadedEntries = DiagnosticPackLoader.LoadValidEntriesFromDirectory(packDir, out var packRejects);
+                    Assert("v32_pack_rejects_delete_mode_and_loads_valid_readonly",
+                        loadedEntries.Count == 0 && packRejects.Count >= 1);
+                }
+
+                // 8D. i18n dictionary parity & v3.2 settings normalization
+                Assert("v32_i18n_loc_zh_en_parity", Loc.VerifyParity());
+                // Verify per-IDE process check does not false-trigger when nonexistent/stopped IDE path is passed
+                var stoppedIdeCand = new CleanCandidate
+                {
+                    Zone = ZoneId.AiIdes,
+                    Tier = CleanTier.OfflineCache,
+                    ActionType = CleanActionType.OfflineSweepFilesKeepSkeleton,
+                    Path = Path.Combine(Roaming, @"Windsurf\Cache"),
+                    ProcessOwnerTag = "Windsurf",
+                    CanSelect = true
+                };
+                bool windsurfActuallyRunning = allProcs[ZoneId.AiIdes].RunningProcesses.Any(p => p.Equals("Windsurf", StringComparison.OrdinalIgnoreCase));
+                Assert("v32_per_ide_process_check_matches_live_state",
+                    IsOfflineTargetProcessRunning(stoppedIdeCand, out _) == windsurfActuallyRunning);
+
+                var origSetV32 = SettingsStore.Load();
+                try
+                {
+                    var probe = origSetV32.Clone();
+                    probe.UiLanguage = "fr-FR"; // unsupported -> must normalize to zh-CN
+                    probe.LowSpaceAlertThresholdGB = 9999; // out of range -> must clamp to 200
+                    probe.EnableTrayLowSpaceAlert = false;
+                    SettingsStore.Save(probe);
+                    var reloaded = SettingsStore.Load();
+                    Assert("v32_settings_i18n_and_tray_normalization",
+                        reloaded.UiLanguage == "zh-CN" &&
+                        reloaded.LowSpaceAlertThresholdGB == 200 &&
+                        !reloaded.EnableTrayLowSpaceAlert);
+                }
+                finally
+                {
+                    SettingsStore.Save(origSetV32);
+                }
             }
             finally
             {

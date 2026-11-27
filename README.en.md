@@ -1,4 +1,4 @@
-# AI Cleaner for Windows v3.0
+# AI Cleaner for Windows v3.2
 
 [简体中文](./README.md) | English
 
@@ -8,23 +8,21 @@
 [![.NET 10](https://img.shields.io/badge/.NET-10%20WPF-2563EB.svg)](https://dotnet.microsoft.com/download/dotnet/10.0)
 [![License: MIT](https://img.shields.io/badge/License-MIT-0A7A4E.svg)](./LICENSE)
 
-A native `.NET 10 + WPF` frosted-glass disk maintenance & space diagnostic utility for Windows 10 / 11 AI developers, paired with a versioned **CLI JSON interface**, an official **read-only Agent Skill**, and zero-dependency `CodexCleaner` PowerShell automation scripts.
-
-Built for heavy users of **Antigravity**, **GPT / Codex Desktop (ChatGPT)**, **DeepSeek Harness (DSH)**, **Claude Code**, and AI developer toolchains (**uv / pip / npm / pnpm / Playwright / Hugging Face / Ollama / LM Studio**). Reclaim gigabytes safely **without ever terminating running AI apps, touching conversations/edit rollback snapshots, corrupting login state, or traversing NTFS junctions**.
+A native `.NET 10 + WPF` frosted-glass disk maintenance & space diagnostic utility for Windows 10 / 11 AI developers spanning **7 AI ecosystem zones**, complete with a **Cross-Zone Top-10 Overview Dashboard**, **live Chinese / English UI switching**, **controlled read-only community diagnostic packs**, **opt-in lightweight tray low-space alerts**, a versioned **CLI JSON interface**, an official **read-only Agent Skill**, and **Scoop / WinGet manifests**.
 
 ---
 
-## What's New in v3.0
+## What's New in v3.2 (Full Roadmap Complete)
 
-- **Extensible 5-Zone Engine (`ZoneCatalog`)**: Data-driven sidebar with automatic local installation detection and collapsible grouping for undetected zones.
-- **Claude Code Zone (Strict Read-Only Diagnostic)**: Inspects `~/.claude` (`debug`, `file-history`, `shell-snapshots`, `projects`, and unknown directories) with interactive **Space Radar** drill-down — strictly **0 deletable candidates** so edit rollback history and credentials are never harmed.
-- **AI Toolchains & Model Radar Zone**:
-  - **Safe Online Clean (Green)**: Expired pure download caches for `uv`, `pip`, and `npm` (automatically skips NTFS junctions and locked files).
-  - **Strict Read-Only Radar**: `pnpm/store` (hardlink store), `Playwright` / `Puppeteer` browser runtimes, and `Hugging Face` / `ModelScope` / `Ollama` / `LM Studio` model caches — never auto-deleted and never counted toward reclaimable space.
-- **GUI Workspace & Protected-Directory Manager**: Two-tab Settings dialog using Windows native `OpenFolderDialog` to manage `CustomCodexCacheRoot`, `ExtraWorkspaceRoots`, and `ExtraProtectedSubtrees` without hand-editing JSON.
-- **Versioned CLI JSON (`schemaVersion: "1.0"`)**: Clean UTF-8 stdout & `--output <path>` support with deterministic exit codes (`0 / 1 / 2 / 3`) and scan telemetry (`status`, `accessDeniedCount`, `elapsedMs`).
-- **Official Read-Only Agent Skill**: Drop [skills/ai-cleaner/SKILL.md](./skills/ai-cleaner/SKILL.md) into Antigravity, Claude Code, or Codex to run safe disk audits on demand.
-- **Automated CI & Verified GitHub Releases**: Builds single-file `win-x64` packages, generates `SHA256SUMS.txt`, extracts the exact release ZIP, and runs all 62 self-tests + non-empty CLI contract checks before publishing.
+- **7 Extensible AI Ecosystem Zones (`ZoneCatalog`)**:
+  - **Antigravity (`antigravity`)**, **GPT / Codex (`gpt-codex`)**, **DeepSeek Harness (`deepseek-harness`)**, **Claude Code (`claude-code`, strict read-only)**, **AI Toolchains (`ai-toolchains`)**.
+  - **AI IDEs Zone (`ai-ides`) — Cursor / Windsurf / Trae**: Verified top-level offline Electron cache cleanup with **per-IDE process locking** + O(1) read-only `state.vscdb` & `workspaceStorage` radar; permanently protects `User`, auth storage, extensions, and `CachedExtensionVSIXs`.
+  - **Local AI & VHDX Radar (`local-ai-ecosystem`, strict read-only)**: Audits **WSL2 / Docker Desktop `ext4.vhdx`** virtual disk bloat (with `wsl --shutdown` + `Optimize-VHD` guidance), **Cline / Roo Code / Continue**, **ComfyUI**, and **controlled read-only community packs**.
+- **Cross-Zone Overview Dashboard & Top-10 Heavyweights**: One-click global rollup across all 7 zones with clickable zone tiles and a Top-10 largest space consumers table.
+- **Instant Bilingual UI (`EN / 中文`)**: Live zero-restart UI language toggle persisted in `settings.json`.
+- **Controlled Read-Only Community Packs (`packs/`)**: Drop `mode: "read-only"` JSON packs into `%LOCALAPPDATA%\AICleaner\packs\` (see [packs/README.md](./packs/README.md) & [community-ai-radar.example.json](./packs/community-ai-radar.example.json)). Strictly blocks non-read-only modes, `..` traversal, wildcards, UNC paths, OS/credential dirs, and NTFS junctions.
+- **Opt-In Lightweight Tray Low-Space Alert**: Off by default (zero background footprint, zero network telemetry). When explicitly enabled in Settings, monitors local fixed drives and notifies when free space drops below your threshold.
+- **Scoop & WinGet Packaging Manifests**: Ready-to-submit manifests and sync script in [packaging/](./packaging/).
 
 ---
 
@@ -32,25 +30,20 @@ Built for heavy users of **Antigravity**, **GPT / Codex Desktop (ChatGPT)**, **D
 
 | Zone (`slug`) | Cleanable Targets | Read-Only Radar & Engine Redlines (Never Touched) |
 | :--- | :--- | :--- |
-| **Antigravity**<br>`antigravity` | Updater leftovers, runtime caches, crash/client logs, stale session artifacts, offline Electron/partition caches | `.gemini\antigravity\conversations`, `.gemini\config`, `.env`, auth state (`Network`, `Local Storage`, `IndexedDB`, `Service Worker\Database`), recent 72h sessions |
-| **GPT / Codex**<br>`gpt-codex` | Optional custom Codex cache root (`temp`, `pip`, `npm`, `uv`, offline `browser-cache` & `desktop-logs`), custom workspace `_tmp`/`__pycache__`/`.pytest_cache`/`.ruff_cache` & stale heavy folders (Recycle Bin), built-in weekly task toggle | `%USERPROFILE%\.codex` & SQLite databases (O(1) read-only size check only), `OpenAI.Codex` MSIX package, all `.codex` NTFS junctions & real targets, `runtimes` |
-| **DeepSeek Harness**<br>`deepseek-harness` | Updater leftovers, `.dsh\cache`, legacy config backups, >14-day attachments (Recycle Bin), offline desktop/partition caches | `.dsh\profiles` (including plugin junctions), `dsh-runtimes`, `skills` junctions, `sessions`, `.credentials.yaml`, auth state |
-| **Claude Code**<br>`claude-code` | **None (Strict Read-Only Zone, 0 deletable candidates)** | `%USERPROFILE%\.claude` & `.claude.json` (`file-history`, `shell-snapshots`, `projects`, `settings.json`, credentials) |
-| **AI Toolchains & Model Radar**<br>`ai-toolchains` | Expired `uv` / `pip` / `npm` download caches only (auto-skips NTFS junctions) | **Read-Only Radar**: `pnpm\store`, `ms-playwright`, `puppeteer`, `huggingface`, `modelscope`, `ollama`, `lm-studio` |
-
-### Core Security Guarantees
-- **Engine-Authorized Execution Gate**: `SafetyGuard.ExecuteCandidate` independently re-validates `(Zone, ActionType, Path)` against compiled targets and validated custom roots before any mutation; OS roots, `.ssh`, `.gnupg`, `.aws`, `.kube`, `Documents`, and `Desktop` are permanently hard-protected.
-- **Full Ancestor-Chain ReparsePoint Guard & Fail-Closed**: Verifies the full ancestor chain up to drive root before sweeping or recycling, skipping NTFS junctions/symlinks and aborting on unverifiable paths.
-- **Zero Process Killing & Live Mid-Sweep Abort**: Running AI apps lock Blue offline caches and auto-unlock upon exit; offline sweeps also re-check process state periodically and abort immediately if an app restarts mid-clean.
-- **62 Built-In Regression Self-Tests + JSON Audit Logs**: Verified in isolated temporary fixtures with real NTFS junctions, forged unauthorized execution targets, and CLI mixed-status contracts.
+| **Antigravity** (`antigravity`) | Updater leftovers, runtime caches, crash/client logs, stale brain artifacts, offline Electron/partition caches | `.gemini\antigravity\conversations`, `.gemini\config`, `.env`, auth storage, recent 72h sessions |
+| **GPT / Codex** (`gpt-codex`) | Custom Codex cache root, validated workspace scratch & stale heavy dirs (Recycle Bin), weekly scheduled task | `%USERPROFILE%\.codex` & SQLite (O(1) telemetry only), MSIX package, `.codex` junctions, `runtimes` |
+| **DeepSeek Harness** (`deepseek-harness`) | Updater leftovers, `.dsh\cache`, legacy backups, >14d attachments (Recycle Bin), offline caches | `.dsh\profiles`, `dsh-runtimes`, `skills` junctions, `sessions`, `.credentials.yaml`, auth storage |
+| **Claude Code** (`claude-code`) | **None (Strict Read-Only, 0 deletable)** | `%USERPROFILE%\.claude` & `.claude.json` (`file-history`, `shell-snapshots`, `projects`, credentials) |
+| **AI Toolchains** (`ai-toolchains`) | Expired `uv` / `pip` / `npm` download caches only (skipping NTFS junctions) | **Read-Only Radar**: `pnpm\store`, `ms-playwright`, `puppeteer`, `huggingface`, `modelscope`, `ollama`, `lm-studio` |
+| **AI IDEs** (`ai-ides`) | Top-level offline Electron caches for Cursor / Windsurf / Trae (per-IDE process locked) | `User`, `state.vscdb`, `workspaceStorage`, extensions, `CachedExtensionVSIXs`, `.cursor`/`.codeium`/`.trae`, auth |
+| **Local AI / VHDX** (`local-ai-ecosystem`) | **None (Strict Read-Only, 0 deletable)** | WSL2 / Docker `ext4.vhdx`, Cline / Roo Code / Continue, ComfyUI, controlled read-only community `packs/` |
 
 ---
 
 ## Quick Start
 
-### Option 1: Download Prebuilt Binary (Recommended)
-Download `AICleaner-win-x64.zip` and `SHA256SUMS.txt` from [GitHub Releases](https://github.com/wwd177/ai-cleaner/releases/latest), verify the checksum, unzip, and launch `AICleaner.exe`.
-> Requires Windows 10 / 11 x64 and [.NET 10 Windows Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0).
+### Option 1: Download Prebuilt Binary
+Grab `AICleaner-win-x64.zip` and `SHA256SUMS.txt` from [GitHub Releases](https://github.com/wwd177/ai-cleaner/releases/latest) (requires Windows 10/11 x64 + [.NET 10 Windows Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0)).
 
 ### Option 2: Build from Source
 ```powershell
@@ -58,24 +51,11 @@ dotnet publish .\src\AICleaner.csproj -c Release -r win-x64 --no-self-contained 
   -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o .\publish
 ```
 
----
-
-## CLI JSON & Self-Test Usage
-
+### CLI Read-Only Audit (`schemaVersion: 1.0`) & Self-Tests
 ```powershell
-# List all 5 zones and installation detection state
 .\publish\AICleaner.exe --list-zones --json
-
-# Read-only audit of all zones (UTF-8 JSON stdout)
 .\publish\AICleaner.exe --dry-run --json
-
-# Audit a single zone by slug
-.\publish\AICleaner.exe --dry-run --json --zone claude-code
-
-# Write JSON directly to disk
-.\publish\AICleaner.exe --dry-run --json --output .\audit.json
-
-# Run all 62 isolated security & regression self-tests
+.\publish\AICleaner.exe --dry-run --json --zone local-ai-ecosystem
 .\publish\AICleaner.exe --self-test .\selftest.txt
 ```
 
@@ -83,14 +63,7 @@ dotnet publish .\src\AICleaner.csproj -c Release -r win-x64 --no-self-contained 
 
 ---
 
-## Agent Skill Integration
-
-See [skills/ai-cleaner/SKILL.md](./skills/ai-cleaner/SKILL.md) to connect AI Cleaner's read-only JSON diagnostics to **Antigravity**, **Claude Code**, or **Codex**. The skill strictly forbids autonomous deletion and directs users to review & confirm inside the desktop GUI.
-
----
-
 ## Contributing & License
 
-Interested in adding support for another AI coding tool (starting in read-only diagnostic mode)? Read [CONTRIBUTING.md](./CONTRIBUTING.md) first.
-
+See [CONTRIBUTING.md](./CONTRIBUTING.md), [skills/ai-cleaner/SKILL.md](./skills/ai-cleaner/SKILL.md), and [packs/README.md](./packs/README.md).
 Licensed under the [MIT License](./LICENSE).

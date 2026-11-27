@@ -304,6 +304,29 @@ public static class GlassDialogs
         pGrid.Children.Add(MakeLabeledField("工作区大目录体积门槛", cmbWsMB, 2));
         pGrid.Children.Add(MakeLabeledField("工作区最小静置宽限期", cmbWsDays, 4));
         pStack.Children.Add(pGrid);
+
+        // Optional lightweight tray low-disk-space alert (off by default, zero network telemetry)
+        var trayRow = new Grid { Margin = new Thickness(0, 12, 0, 0) };
+        trayRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        trayRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var chkTray = new CheckBox
+        {
+            Content = "启用轻量系统托盘低空间预警（默认关闭 · 零网络遥测 · 关闭窗口时最小化至托盘）",
+            IsChecked = current.EnableTrayLowSpaceAlert,
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var cmbTrayGb = MakeChoiceBox(new[] { 10, 20, 30, 50, 100 }, current.LowSpaceAlertThresholdGB, " GB 预警");
+        cmbTrayGb.Width = 118;
+        cmbTrayGb.Margin = new Thickness(10, 0, 0, 0);
+        cmbTrayGb.IsEnabled = current.EnableTrayLowSpaceAlert;
+        chkTray.Checked += (_, _) => cmbTrayGb.IsEnabled = true;
+        chkTray.Unchecked += (_, _) => cmbTrayGb.IsEnabled = false;
+        Grid.SetColumn(cmbTrayGb, 1);
+        trayRow.Children.Add(chkTray);
+        trayRow.Children.Add(cmbTrayGb);
+        pStack.Children.Add(trayRow);
+
         policyCard.Child = pStack;
         DockPanel.SetDock(policyCard, Dock.Top);
         tab1Panel.Children.Add(policyCard);
@@ -513,6 +536,8 @@ public static class GlassDialogs
             fresh.TempMinAgeDays = (int)((ComboBoxItem)cmbTempDays.SelectedItem).Tag;
             fresh.WorkspaceMinSizeMB = (int)((ComboBoxItem)cmbWsMB.SelectedItem).Tag;
             fresh.WorkspaceMinAgeDays = (int)((ComboBoxItem)cmbWsDays.SelectedItem).Tag;
+            fresh.EnableTrayLowSpaceAlert = chkTray.IsChecked == true;
+            fresh.LowSpaceAlertThresholdGB = (int)((ComboBoxItem)cmbTrayGb.SelectedItem).Tag;
             fresh.CustomCodexCacheRoot = cacheRoot;
             fresh.ExtraWorkspaceRoots = validatedWs;
             fresh.ExtraProtectedSubtrees = protList.Items.Cast<string>().ToList();
@@ -524,6 +549,251 @@ public static class GlassDialogs
         win.Content = root;
         win.ShowDialog();
         return changed;
+    }
+
+    /// <summary>Phase 2 Cross-Zone Overview Dashboard & Top-10 Space Heavyweights leaderboard.</summary>
+    public static void ShowCrossZoneOverviewDialog(
+        Window owner,
+        Dictionary<ZoneId, ZoneScanReport> reports,
+        Action<ZoneId> onJumpToZone)
+    {
+        bool en = Loc.IsEnglish;
+        var win = new Window
+        {
+            Title = Loc.T("DashboardTitle"),
+            Owner = owner,
+            Width = 960,
+            Height = 640,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = new LinearGradientBrush(Color.FromRgb(245, 250, 255), Color.FromRgb(227, 240, 255), 45),
+            FontFamily = new FontFamily("Microsoft YaHei UI"),
+            Foreground = new SolidColorBrush(Color.FromRgb(10, 28, 54)),
+            ResizeMode = ResizeMode.CanResizeWithGrip
+        };
+        ApplyIceBlueTitleBar(win);
+
+        var root = new DockPanel { Margin = new Thickness(18) };
+
+        // 1. Top 4 Summary KPI Cards
+        long sumSafe = reports.Values.Sum(r => r.SafeOnlineBytes);
+        long sumRec = reports.Values.Sum(r => r.RecycleCandidateBytes);
+        long sumOff = reports.Values.Sum(r => r.OfflineCacheBytes);
+        long sumDiag = reports.Values.Sum(r => r.DiagnosticBytes);
+        int detectedCnt = ZoneCatalog.All.Count(z => reports.TryGetValue(z.Id, out var rep) ? rep.IsDetected : z.DetectInstalled());
+
+        var headerBar = new DockPanel { Margin = new Thickness(0, 0, 0, 12) };
+        var titleBlock = new StackPanel();
+        titleBlock.Children.Add(new TextBlock
+        {
+            Text = Loc.T("DashboardTitle"),
+            FontSize = 19,
+            FontWeight = FontWeights.Bold
+        });
+        titleBlock.Children.Add(new TextBlock
+        {
+            Text = en
+                ? $"Audited {reports.Count}/{ZoneCatalog.All.Count} zones ({detectedCnt} installed). Click any zone tile to switch or double-click Top 10 items to open Explorer."
+                : $"已汇总 {reports.Count}/{ZoneCatalog.All.Count} 个生态专区（本机检测到 {detectedCnt} 个）；单击专区卡片直达对应区，双击 Top 10 大户打开目录。",
+            FontSize = 12,
+            Foreground = new SolidColorBrush(Color.FromRgb(71, 98, 130)),
+            Margin = new Thickness(0, 3, 0, 0)
+        });
+        headerBar.Children.Add(titleBlock);
+        DockPanel.SetDock(headerBar, Dock.Top);
+        root.Children.Add(headerBar);
+
+        var kpiGrid = new Grid { Margin = new Thickness(0, 0, 0, 12) };
+        for (int i = 0; i < 4; i++)
+        {
+            if (i > 0) kpiGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(10) });
+            kpiGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        }
+
+        static Border MakeOverviewKpi(string label, string val, string sub, Color borderCol, Color inkCol)
+        {
+            var b = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(232, 255, 255, 255)),
+                BorderBrush = new SolidColorBrush(borderCol),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(11),
+                Padding = new Thickness(13, 10, 13, 10)
+            };
+            var sp = new StackPanel();
+            sp.Children.Add(new TextBlock { Text = label, FontSize = 11.5, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(inkCol) });
+            sp.Children.Add(new TextBlock { Text = val, FontSize = 21, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 4, 0, 2) });
+            sp.Children.Add(new TextBlock { Text = sub, FontSize = 11, Foreground = new SolidColorBrush(Color.FromRgb(94, 118, 148)) });
+            b.Child = sp;
+            return b;
+        }
+
+        var c1 = MakeOverviewKpi(en ? "Green · Safe Online" : "全区绿区 · 在线可清", CleanCandidate.FormatBytes(sumSafe), en ? "Cleanable while running" : "应用运行中可立即释放", Color.FromRgb(178, 228, 205), Color.FromRgb(10, 122, 78));
+        var c2 = MakeOverviewKpi(en ? "Yellow · Recycle Bin" : "全区黄区 · 回收站候选", CleanCandidate.FormatBytes(sumRec), en ? "Reversible via Recycle Bin" : "移入回收站可随时还原", Color.FromRgb(240, 219, 174), Color.FromRgb(166, 94, 4));
+        var c3 = MakeOverviewKpi(en ? "Blue · Offline Caches" : "全区蓝区 · 离线缓存", CleanCandidate.FormatBytes(sumOff), en ? "Cleanable after app exit" : "退出对应应用后可安全清理", Color.FromRgb(196, 209, 249), Color.FromRgb(67, 56, 202));
+        var c4 = MakeOverviewKpi(en ? "Read-Only Radar" : "全区只读诊断雷达", CleanCandidate.FormatBytes(sumDiag), en ? "Diagnostic only (0 auto-delete)" : "仅盘点透视，不计入可释放量", Color.FromRgb(153, 224, 220), Color.FromRgb(15, 118, 110));
+        Grid.SetColumn(c1, 0); Grid.SetColumn(c2, 2); Grid.SetColumn(c3, 4); Grid.SetColumn(c4, 6);
+        kpiGrid.Children.Add(c1); kpiGrid.Children.Add(c2); kpiGrid.Children.Add(c3); kpiGrid.Children.Add(c4);
+        DockPanel.SetDock(kpiGrid, Dock.Top);
+        root.Children.Add(kpiGrid);
+
+        // 2. Per-Zone Clickable Tiles WrapPanel
+        var zoneWrap = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };
+        foreach (var def in ZoneCatalog.All)
+        {
+            reports.TryGetValue(def.Id, out var rep);
+            long cleanable = rep == null ? 0 : (rep.SafeOnlineBytes + rep.RecycleCandidateBytes + (rep.ProcessInfo.IsRunning ? 0 : rep.OfflineCacheBytes));
+            long diag = rep?.DiagnosticBytes ?? 0;
+
+            var tile = new Border
+            {
+                Width = 216,
+                Margin = new Thickness(0, 0, 8, 8),
+                Padding = new Thickness(11, 8, 11, 8),
+                CornerRadius = new CornerRadius(10),
+                Background = new SolidColorBrush(Color.FromArgb(228, 255, 255, 255)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(198, 222, 248)),
+                BorderThickness = new Thickness(1),
+                Cursor = System.Windows.Input.Cursors.Hand
+            };
+            var sp = new StackPanel();
+            sp.Children.Add(new TextBlock
+            {
+                Text = def.LocalizedShortName,
+                FontSize = 12.5,
+                FontWeight = FontWeights.Bold,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            });
+            string statLine = def.IsReadOnlyZone
+                ? (en ? $"Read-Only: {CleanCandidate.FormatBytes(diag)}" : $"只读盘点：{CleanCandidate.FormatBytes(diag)}")
+                : (en ? $"Clean: {CleanCandidate.FormatBytes(cleanable)} · Radar: {CleanCandidate.FormatBytes(diag)}"
+                      : $"可清 {CleanCandidate.FormatBytes(cleanable)} · 雷达 {CleanCandidate.FormatBytes(diag)}");
+            sp.Children.Add(new TextBlock
+            {
+                Text = statLine,
+                FontSize = 11,
+                Foreground = new SolidColorBrush(Color.FromRgb(71, 98, 130)),
+                Margin = new Thickness(0, 3, 0, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis
+            });
+            tile.Child = sp;
+            var targetZone = def.Id;
+            tile.MouseLeftButtonUp += (_, _) =>
+            {
+                onJumpToZone(targetZone);
+                win.Close();
+            };
+            zoneWrap.Children.Add(tile);
+        }
+        DockPanel.SetDock(zoneWrap, Dock.Top);
+        root.Children.Add(zoneWrap);
+
+        // 3. Top-10 Heavyweights deduplicated by normalized path (prevents built-in + community pack double-listing)
+        var seenTopPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var topItems = reports.Values
+            .SelectMany(r => r.Candidates.Where(c => c.SizeBytes > 0).Select(c => (Report: r, Cand: c)))
+            .OrderByDescending(x => x.Cand.SizeBytes)
+            .Where(x =>
+            {
+                string key = SafetyGuard.TryNormalizePath(x.Cand.Path, out var norm) ? norm : x.Cand.StableKey;
+                return seenTopPaths.Add(key);
+            })
+            .Take(10)
+            .Select((x, idx) => new DashboardTopItem
+            {
+                Rank = idx + 1,
+                Zone = x.Cand.Zone,
+                ZoneShortName = ZoneCatalog.Get(x.Cand.Zone).LocalizedShortName,
+                Title = x.Cand.Title,
+                Path = x.Cand.Path,
+                TierBadge = x.Cand.TierBadge,
+                SizeBytes = x.Cand.SizeBytes,
+                IsReadOnlyDiagnostic = x.Cand.IsReadOnlyDiagnostic,
+                CanCleanNow = x.Cand.CanSelect && !x.Cand.IsReadOnlyDiagnostic
+            })
+            .ToList();
+
+        var grid = new DataGrid
+        {
+            ItemsSource = topItems,
+            AutoGenerateColumns = false,
+            IsReadOnly = true,
+            CanUserAddRows = false,
+            HeadersVisibility = DataGridHeadersVisibility.Column,
+            GridLinesVisibility = DataGridGridLinesVisibility.Horizontal,
+            HorizontalGridLinesBrush = new SolidColorBrush(Color.FromRgb(222, 236, 252)),
+            Background = new SolidColorBrush(Color.FromArgb(234, 255, 255, 255)),
+            RowBackground = Brushes.Transparent,
+            AlternatingRowBackground = new SolidColorBrush(Color.FromArgb(72, 232, 243, 255)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(198, 222, 248)),
+            BorderThickness = new Thickness(1),
+            RowHeight = 36,
+            FontSize = 12.5
+        };
+        grid.Columns.Add(new DataGridTextColumn { Header = "#", Binding = new System.Windows.Data.Binding("Rank"), Width = 38 });
+        grid.Columns.Add(new DataGridTextColumn { Header = en ? "Zone" : "所属专区", Binding = new System.Windows.Data.Binding("ZoneShortName"), Width = 132 });
+        grid.Columns.Add(new DataGridTextColumn { Header = en ? "Tier" : "分级", Binding = new System.Windows.Data.Binding("TierBadge"), Width = 118 });
+        grid.Columns.Add(new DataGridTextColumn { Header = en ? "Item" : "Top 10 空间大户项目", Binding = new System.Windows.Data.Binding("Title"), Width = new DataGridLength(1.6, DataGridLengthUnitType.Star) });
+        grid.Columns.Add(new DataGridTextColumn { Header = en ? "Size" : "体积", Binding = new System.Windows.Data.Binding("SizeText"), Width = 92 });
+        grid.Columns.Add(new DataGridTextColumn { Header = en ? "Mode" : "状态", Binding = new System.Windows.Data.Binding("CleanStatusLabel"), Width = 84 });
+
+        grid.MouseDoubleClick += (_, _) =>
+        {
+            if (grid.SelectedItem is DashboardTopItem it)
+            {
+                try
+                {
+                    if (Directory.Exists(it.Path)) Process.Start(new ProcessStartInfo("explorer.exe", $"\"{it.Path}\"") { UseShellExecute = true });
+                    else if (File.Exists(it.Path)) Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{it.Path}\"") { UseShellExecute = true });
+                }
+                catch { }
+            }
+        };
+
+        var bottomBar = new DockPanel { Margin = new Thickness(0, 12, 0, 0) };
+        var leftBtns = new StackPanel { Orientation = Orientation.Horizontal };
+        var btnJump = new Button { Content = en ? "Go to Zone" : "跳转所在专区", Style = (Style)Application.Current.FindResource("GlassBtn"), Margin = new Thickness(0, 0, 8, 0) };
+        var btnRadar = new Button { Content = en ? "Open Space Radar" : "空间雷达透视", Style = (Style)Application.Current.FindResource("GlassBtn"), Margin = new Thickness(0, 0, 8, 0) };
+        var btnPacks = new Button { Content = en ? "Open Packs Folder" : "打开社区诊断包目录", Style = (Style)Application.Current.FindResource("GlassBtn") };
+        btnJump.Click += (_, _) =>
+        {
+            if (grid.SelectedItem is DashboardTopItem it) { onJumpToZone(it.Zone); win.Close(); }
+        };
+        btnRadar.Click += (_, _) =>
+        {
+            if (grid.SelectedItem is DashboardTopItem it && (Directory.Exists(it.Path) || File.Exists(it.Path)))
+                ShowSpaceMapDialog(win, it.Path, it.Title);
+        };
+        btnPacks.Click += (_, _) =>
+        {
+            try
+            {
+                Directory.CreateDirectory(DiagnosticPackLoader.UserPacksDir);
+                Process.Start(new ProcessStartInfo("explorer.exe", $"\"{DiagnosticPackLoader.UserPacksDir}\"") { UseShellExecute = true });
+            }
+            catch { }
+        };
+        leftBtns.Children.Add(btnJump);
+        leftBtns.Children.Add(btnRadar);
+        leftBtns.Children.Add(btnPacks);
+        DockPanel.SetDock(leftBtns, Dock.Left);
+        bottomBar.Children.Add(leftBtns);
+
+        var btnClose = new Button
+        {
+            Content = en ? "Close" : "关闭",
+            Style = (Style)Application.Current.FindResource("PrimaryGlassBtn"),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Width = 90,
+            IsCancel = true
+        };
+        btnClose.Click += (_, _) => win.Close();
+        bottomBar.Children.Add(btnClose);
+        DockPanel.SetDock(bottomBar, Dock.Bottom);
+        root.Children.Add(bottomBar);
+        root.Children.Add(grid);
+
+        win.Content = root;
+        win.ShowDialog();
     }
 
     private static Border BuildFolderListCard(string headerText, ListBox listBox, Action onAdd)

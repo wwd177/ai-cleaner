@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+
+PackageIdentifier: wwd177.AICleaner
+PackageVersion: 3.2.0
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: AICleaner.exe
+    PortableCommandAlias: ai-cleaner
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/wwd177/ai-cleaner/releases/download/v3.2.0/AICleaner-win-x64.zip
+    InstallerSha256: REPLACE_WITH_RELEASE_SHA256_USING_UPDATE_SCRIPT
+ManifestType: installer
+ManifestVersion: 1.6.0

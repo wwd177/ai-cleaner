@@ -78,13 +78,33 @@ public partial class MainWindow : Window
     private long _procRefreshSeq;
     private DateTime _lastActivatedRefreshUtc = DateTime.MinValue;
     private readonly string? _qaCaptureDir;
+    private TrayAlertService? _trayService;
+    private bool _explicitExitRequested;
 
     public MainWindow(string? qaCaptureDir = null)
     {
         _qaCaptureDir = qaCaptureDir;
+        Loc.SetLanguage(SettingsStore.Load().UiLanguage);
         InitializeComponent();
         GlassDialogs.ApplyIceBlueTitleBar(this);
         InitializeDynamicSidebar();
+        ApplyLocalization();
+        _trayService = new TrayAlertService(this, () =>
+        {
+            _explicitExitRequested = true;
+            Dispatcher.Invoke(Close);
+        });
+        _trayService.SyncWithSettings(SettingsStore.Load(), suppressForQa: !string.IsNullOrWhiteSpace(_qaCaptureDir));
+
+        // Never block Windows logoff/shutdown when minimized to tray
+        if (Application.Current != null)
+        {
+            Application.Current.SessionEnding += (_, _) =>
+            {
+                _explicitExitRequested = true;
+                _trayService?.Dispose();
+            };
+        }
 
         // Live auto-unlock: when user exits ChatGPT/Antigravity/DSH and switches back,
         // asynchronously re-check processes (~7ms, 0ms UI lag) and auto-unlock Blue offline caches!
@@ -182,7 +202,66 @@ public partial class MainWindow : Window
             _activeSidebarZones.Add(first);
         }
         ExpUninstalledZones.Visibility = _inactiveSidebarZones.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        ExpUninstalledZones.Header = $"未检测到 / 其他专区 ({_inactiveSidebarZones.Count})";
+        ExpUninstalledZones.Header = $"{Loc.T("UninstalledGroup")} ({_inactiveSidebarZones.Count})";
+    }
+
+    private void ApplyLocalization()
+    {
+        Title = Loc.T("AppTitle");
+        TxtBrandName.Text = Loc.T("BrandName");
+        TxtBrandSub.Text = Loc.T("BrandSub");
+        TxtChooseZone.Text = Loc.T("ChooseZone");
+        TxtBtnScanAll.Text = Loc.T("BtnScanAll");
+        TxtDiskTitle.Text = Loc.T("DiskTitle");
+        TxtDriveCLabel.Text = Loc.T("DriveC");
+        TxtRecycleLabel.Text = Loc.T("RecycleBin");
+        TxtBtnHistory.Text = Loc.T("BtnHistory");
+        TxtBtnSettings.Text = Loc.T("BtnSettings");
+        TxtBtnRecycle.Text = Loc.T("BtnRecycleBin");
+        TxtBtnRedlines.Text = Loc.T("BtnRedlines");
+        TxtBtnOverview.Text = Loc.IsEnglish ? "Overview" : "跨区总览";
+        TxtBtnRescan.Text = Loc.T("BtnRescan");
+        TxtBtnExport.Text = Loc.T("BtnExport");
+        BtnLangToggle.Content = Loc.T("BtnLangToggle");
+        TxtKpiSafeLabel.Text = Loc.T("KpiSafeTitle");
+        TxtKpiRecycleLabel.Text = Loc.T("KpiRecycleTitle");
+        TxtBreakdownLabel.Text = Loc.T("BreakdownLabel");
+        RbFilterAll.Content = Loc.T("FilterAll");
+        RbFilterSafe.Content = Loc.T("FilterSafe");
+        RbFilterRecycle.Content = Loc.T("FilterRecycle");
+        RbFilterOffline.Content = Loc.T("FilterOffline");
+        RbFilterProtected.Content = Loc.T("FilterProtected");
+        TxtSearchPlaceholder.Text = Loc.T("SearchPlaceholder");
+        if (CmbSort.Items.Count >= 4)
+        {
+            ((ComboBoxItem)CmbSort.Items[0]).Content = Loc.T("SortDefault");
+            ((ComboBoxItem)CmbSort.Items[1]).Content = Loc.T("SortSize");
+            ((ComboBoxItem)CmbSort.Items[2]).Content = Loc.T("SortTime");
+            ((ComboBoxItem)CmbSort.Items[3]).Content = Loc.T("SortName");
+        }
+        BtnSelectSafe.Content = Loc.T("BtnSelectSafe");
+        BtnClearSelection.Content = Loc.T("BtnClearSel");
+        BtnSpaceMapToolbar.Content = Loc.T("BtnSpaceRadar");
+        BtnLocateToolbar.Content = Loc.T("BtnLocate");
+        BtnWhitelistToolbar.Content = Loc.T("BtnWhitelist");
+        BtnInspectorSpaceMap.Content = Loc.T("BtnInspectRadar");
+        BtnInspectorCopy.Content = Loc.T("BtnCopyPath");
+        if (GridCandidates.Columns.Count >= 7)
+        {
+            GridCandidates.Columns[0].Header = Loc.T("ColSelect");
+            GridCandidates.Columns[1].Header = Loc.T("ColTier");
+            GridCandidates.Columns[2].Header = Loc.T("ColItemPath");
+            GridCandidates.Columns[3].Header = Loc.T("ColSize");
+            GridCandidates.Columns[4].Header = Loc.T("ColFiles");
+            GridCandidates.Columns[5].Header = Loc.T("ColModified");
+            GridCandidates.Columns[6].Header = Loc.T("ColReason");
+        }
+        ExpUninstalledZones.Header = $"{Loc.T("UninstalledGroup")} ({_inactiveSidebarZones.Count})";
+        foreach (var item in _sidebarByZone.Values) item.NotifyLocalizationChanged();
+        _trayService?.RefreshMenuLocalization();
+        UpdateZoneChrome();
+        UpdateGlobalSafeCleanButton();
+        RefreshPolicyButtonLabel();
     }
 
     protected override void OnClosing(CancelEventArgs e)
@@ -195,6 +274,15 @@ public partial class MainWindow : Window
                 "清理进行中", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
+        // When user opted into Tray Low-Space Alert, minimize to tray on window X unless explicitly exiting or running QA capture
+        if (!_explicitExitRequested && string.IsNullOrWhiteSpace(_qaCaptureDir) && _trayService is { IsActive: true })
+        {
+            e.Cancel = true;
+            Hide();
+            return;
+        }
+        _trayService?.Dispose();
+        _trayService = null;
         foreach (var cts in _zoneScanCts.Values)
         {
             // Cancel only; each running ScanSingleZoneAsync owns and disposes its own CTS in finally.
@@ -241,8 +329,8 @@ public partial class MainWindow : Window
             bench.AppendLine($"Scan_{def.Slug}_ms={swScan.ElapsedMilliseconds}");
         }
 
-        // Measure pure UI switching latency across all 5 zones!
-        foreach (var z in new[] { ZoneId.GptCodex, ZoneId.DeepSeekHarness, ZoneId.ClaudeCode, ZoneId.AiToolchains, ZoneId.Antigravity, ZoneId.GptCodex })
+        // Measure pure UI switching latency across all 7 zones!
+        foreach (var z in new[] { ZoneId.GptCodex, ZoneId.DeepSeekHarness, ZoneId.ClaudeCode, ZoneId.AiToolchains, ZoneId.AiIdes, ZoneId.LocalAiEcosystem, ZoneId.Antigravity, ZoneId.GptCodex })
         {
             var swSwitch = Stopwatch.StartNew();
             SwitchToZoneInstant(z);
@@ -420,10 +508,15 @@ public partial class MainWindow : Window
                 if (!_reports.TryGetValue(zone, out var rep)) continue;
                 bool wasRunning = rep.ProcessInfo.IsRunning;
                 rep.ProcessInfo = newProc;
-                if (wasRunning != newProc.IsRunning)
+                if (wasRunning != newProc.IsRunning || zone == ZoneId.AiIdes)
                 {
                     foreach (var c in rep.Candidates.Where(x => x.Tier == CleanTier.OfflineCache))
-                        c.ApplyProcessLockState(newProc.IsRunning);
+                    {
+                        bool itemRunning = !string.IsNullOrEmpty(c.ProcessOwnerTag)
+                            ? newProc.RunningProcesses.Any(p => p.Equals(c.ProcessOwnerTag, StringComparison.OrdinalIgnoreCase))
+                            : newProc.IsRunning;
+                        c.ApplyProcessLockState(itemRunning);
+                    }
 
                     UpdateSidebarZoneSummary(rep);
                     if (!newProc.IsRunning)
@@ -456,8 +549,8 @@ public partial class MainWindow : Window
         BringSelectedZoneCardIntoView(_currentZone);
 
         BarGptSchedule.Visibility = def.HasScheduledTaskStrip ? Visibility.Visible : Visibility.Collapsed;
-        TxtZoneTitle.Text = def.DisplayName;
-        TxtZoneSubtitle.Text = def.Subtitle;
+        TxtZoneTitle.Text = def.LocalizedDisplayName;
+        TxtZoneSubtitle.Text = def.LocalizedSubtitle;
         ApplyCurrentReportToView();
     }
 
@@ -542,7 +635,12 @@ public partial class MainWindow : Window
             {
                 report.ProcessInfo = latestProc;
                 foreach (var c in report.Candidates.Where(x => x.Tier == CleanTier.OfflineCache))
-                    c.ApplyProcessLockState(latestProc.IsRunning);
+                {
+                    bool itemRunning = !string.IsNullOrEmpty(c.ProcessOwnerTag)
+                        ? latestProc.RunningProcesses.Any(p => p.Equals(c.ProcessOwnerTag, StringComparison.OrdinalIgnoreCase))
+                        : latestProc.IsRunning;
+                    c.ApplyProcessLockState(itemRunning);
+                }
             }
             else
             {
@@ -722,17 +820,19 @@ public partial class MainWindow : Window
         bool showDiagInKpi3 = def.IsReadOnlyZone || (offCnt == 0 && diagCnt > 0);
         if (showDiagInKpi3)
         {
-            TxtKpiOfflineLabel.Text = "只读雷达 · 空间诊断（绝不自动删）";
+            TxtKpiOfflineLabel.Text = Loc.T("KpiDiagTitle");
             TxtKpiOffline.Text = CleanCandidate.FormatBytes(rep.DiagnosticBytes);
-            TxtKpiOfflineSub.Text = $"{diagCnt} 项 · 右键/点「空间雷达」下钻查看";
+            TxtKpiOfflineSub.Text = Loc.IsEnglish
+                ? $"{diagCnt} items · Click Space Radar to inspect"
+                : $"{diagCnt} 项 · 右键/点「空间雷达」下钻查看";
         }
         else
         {
-            TxtKpiOfflineLabel.Text = "蓝区 · 离线浏览器缓存（退出后可清）";
+            TxtKpiOfflineLabel.Text = Loc.T("KpiOfflineTitle");
             TxtKpiOffline.Text = CleanCandidate.FormatBytes(rep.OfflineCacheBytes);
             TxtKpiOfflineSub.Text = rep.ProcessInfo.IsRunning
-                ? $"{offCnt} 项 · 应用运行中已自动加锁"
-                : $"{offCnt} 项 · 应用已退出，可勾选清理";
+                ? (Loc.IsEnglish ? $"{offCnt} items · Locked while app runs" : $"{offCnt} 项 · 应用运行中已自动加锁")
+                : (Loc.IsEnglish ? $"{offCnt} items · App stopped, ready to clean" : $"{offCnt} 项 · 应用已退出，可勾选清理");
         }
 
         BtnSelectRecommended.Content = recoCnt > 0
@@ -1308,6 +1408,21 @@ public partial class MainWindow : Window
         if (!ok) MessageBox.Show(this, msg, "计划任务操作提示", MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 
+    private void BtnOverviewDashboard_Click(object sender, RoutedEventArgs e)
+    {
+        GlassDialogs.ShowCrossZoneOverviewDialog(this, _reports, targetZone => SwitchToZoneInstant(targetZone));
+    }
+
+    private void BtnLangToggle_Click(object sender, RoutedEventArgs e)
+    {
+        string nextLang = Loc.IsEnglish ? "zh-CN" : "en-US";
+        Loc.SetLanguage(nextLang);
+        var s = SettingsStore.Load();
+        s.UiLanguage = nextLang;
+        SettingsStore.Save(s);
+        ApplyLocalization();
+    }
+
     private void BtnShowHistory_Click(object sender, RoutedEventArgs e) =>
         GlassDialogs.ShowHistoryDialog(this);
 
@@ -1318,6 +1433,7 @@ public partial class MainWindow : Window
         {
             RefreshPolicyButtonLabel();
             RefreshSidebarDetectionGroups();
+            _trayService?.SyncWithSettings(SettingsStore.Load(), suppressForQa: !string.IsNullOrWhiteSpace(_qaCaptureDir));
             var procs = await RefreshAllProcessBadgesAsync(syncOfflineLocks: false);
             await Task.WhenAll(ZoneCatalog.All.Select(def =>
                 ScanSingleZoneAsync(def.Id, silent: true, preloadedProc: procs[def.Id])));
@@ -1339,22 +1455,25 @@ public partial class MainWindow : Window
     private void BtnShowRedlines_Click(object sender, RoutedEventArgs e)
     {
         string msg =
-            "【五专区引擎级硬红线保护（双层实时校验）】\n\n" +
+            "【七专区引擎级硬红线保护（双层实时校验 + 执行器授权闸门）】\n\n" +
             "1. Antigravity 专区\n" +
             "   • 永不触碰：conversations 主对话库、.gemini/config、.env、登录态 Network/LocalStorage/IndexedDB/Service Worker Database、最近 72 小时会话产物。\n\n" +
             "2. GPT / Codex 专区（ChatGPT 桌面端）\n" +
-            "   • 永不触碰：%USERPROFILE%\\.codex 全目录与全部 SQLite 数据库（仅 O(1) 只读体积诊断）、MSIX 包目录、runtimes、.codex 全部联接目标及含联接目录。\n" +
-            "   • 离线浏览器缓存仅在 ChatGPT/codex 进程为 0 时开放（退出切回本窗口自动解锁），且只删内部文件、完整保留目录骨架。\n\n" +
+            "   • 永不触碰：%USERPROFILE%\\.codex 全目录与全部 SQLite 数据库（仅 O(1) 只读诊断）、MSIX 包目录、runtimes、.codex 全部联接目标及含联接目录。\n\n" +
             "3. DeepSeek Harness 专区\n" +
             "   • 永不触碰：.dsh/profiles（含插件联接）、dsh-runtimes、skills 联接、sessions、.credentials.yaml 与登录态。\n\n" +
-            "4. Claude Code 专区（v3.0 严格只读诊断模式）\n" +
-            "   • 永不触碰：.claude 全目录（含 file-history 编辑回滚副本、shell-snapshots、projects 与凭据），删除候选数恒为 0，仅提供空间雷达只读透视。\n\n" +
+            "4. Claude Code 专区（严格只读诊断模式）\n" +
+            "   • 永不触碰：.claude 全目录（含 file-history 编辑回滚副本、shell-snapshots、projects 与凭据），删除候选恒为 0。\n\n" +
             "5. AI 工具链与模型雷达\n" +
-            "   • 仅 uv / pip / npm 超期纯下载缓存开放绿区清理（自动跳过 NTFS 联接）；pnpm 硬链接库、Playwright/Puppeteer 浏览器与 Hugging Face/Ollama/LM Studio 均严格只读，绝不误删或虚报释放量。\n\n" +
-            "6. 通用铁律\n" +
-            "   • 引擎编译期全局硬保护 .ssh/.gnupg/.aws/.kube/Documents/Desktop；全祖先链联接校验；绝不强杀运行中桌面进程；支持 CLI --dry-run --json 只读集成。";
-        MessageBox.Show(this, msg, "红线保护说明", MessageBoxButton.OK, MessageBoxImage.Information);
+            "   • 仅 uv / pip / npm 超期纯下载缓存开放绿区清理（跳过 NTFS 联接）；pnpm 硬链接库、Playwright/Puppeteer 与 Hugging Face/Ollama/LM Studio 均严格只读。\n\n" +
+            "6. AI IDE 专区（Cursor / Windsurf / Trae）\n" +
+            "   • 仅顶层离线 Electron 缓存按各 IDE 进程独立加锁开放清理；硬保护 User/globalStorage/state.vscdb、workspaceStorage、扩展目录与 CachedExtensionVSIXs。\n\n" +
+            "7. 本地 AI 生态与虚拟盘雷达（严格只读）\n" +
+            "   • WSL2/Docker ext4.vhdx、Cline/Roo Code/Continue、ComfyUI 与受控只读社区规则包均强制只读（0 删除候选），绝不自动删文件。\n\n" +
+            "8. 通用铁律\n" +
+            "   • 执行器入口强制二次核验 (Zone, Action, Path)；硬保护系统目录与 .ssh/.gnupg/.aws/.kube/Documents/Desktop；全祖先链联接校验；绝不强杀运行中桌面进程。";
+        MessageBox.Show(this, msg, Loc.T("BtnRedlines"), MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
-    private static string GetZoneName(ZoneId z) => ZoneCatalog.Get(z).DisplayName;
+    private static string GetZoneName(ZoneId z) => ZoneCatalog.Get(z).LocalizedDisplayName;
 }

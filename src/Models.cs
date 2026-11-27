@@ -10,7 +10,9 @@ public enum ZoneId
     GptCodex,
     DeepSeekHarness,
     ClaudeCode,
-    AiToolchains
+    AiToolchains,
+    AiIdes,
+    LocalAiEcosystem
 }
 
 public enum ScanStatus
@@ -67,6 +69,8 @@ public sealed class CleanCandidate : INotifyPropertyChanged
     public bool IsReadOnlyDiagnostic { get; set; }
     public bool EnforceActive72hFloor { get; set; } = true;
     public string ActionHint { get; set; } = "";
+    /// <summary>Optional specific process owner name for multi-product zones (e.g. "Cursor" / "Windsurf" / "Trae").</summary>
+    public string ProcessOwnerTag { get; set; } = "";
 
     /// <summary>Stable logical identity across rescans so user selections survive refreshes safely.</summary>
     public string StableKey => $"{Zone}|{ActionType}|{Path.Trim().ToLowerInvariant()}|{Title}";
@@ -346,12 +350,14 @@ public sealed class ZoneSidebarItem : INotifyPropertyChanged
 
     public required ZoneDefinition Definition { get; init; }
     public ZoneId Zone => Definition.Id;
-    public string ShortName => Definition.ShortName;
+    public string ShortName => Definition.LocalizedShortName;
     public string AccentHex => Definition.AccentHex;
     public string IconBgHex => Definition.IconBgHex;
     public string IconPathData => Definition.IconPathData;
     public bool IconFillMode => Definition.IconFillMode;
     public bool IsReadOnlyZone => Definition.IsReadOnlyZone;
+
+    public void NotifyLocalizationChanged() => OnPropertyChanged(nameof(ShortName));
 
     public bool IsSelected
     {
@@ -388,4 +394,19 @@ public sealed class ZoneSidebarItem : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+}
+
+public sealed class DashboardTopItem
+{
+    public int Rank { get; init; }
+    public ZoneId Zone { get; init; }
+    public string ZoneShortName { get; init; } = "";
+    public string Title { get; init; } = "";
+    public string Path { get; init; } = "";
+    public string TierBadge { get; init; } = "";
+    public long SizeBytes { get; init; }
+    public string SizeText => CleanCandidate.FormatBytes(SizeBytes);
+    public bool IsReadOnlyDiagnostic { get; init; }
+    public bool CanCleanNow { get; init; }
+    public string CleanStatusLabel => IsReadOnlyDiagnostic ? (Loc.IsEnglish ? "Read-Only" : "只读诊断") : (CanCleanNow ? (Loc.IsEnglish ? "Reclaimable" : "可清理") : (Loc.IsEnglish ? "Locked/Protected" : "锁定/保护"));
 }

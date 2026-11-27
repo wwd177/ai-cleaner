@@ -1,6 +1,6 @@
 ---
 name: ai-cleaner
-description: Read-only Windows AI workspace & toolchain disk diagnostic skill powered by AI Cleaner (AICleaner.exe). Use when the user asks to inspect disk usage across Antigravity, GPT/Codex, DeepSeek Harness, Claude Code, or AI toolchains (uv/pip/npm/pnpm/Playwright/Hugging Face/Ollama) and produce an actionable cleanup summary without modifying any files.
+description: Read-only Windows AI workspace, IDE, toolchain & WSL2/VHDX disk diagnostic skill powered by AI Cleaner (AICleaner.exe v3.2+). Use when the user asks to inspect disk usage across Antigravity, GPT/Codex, DeepSeek Harness, Claude Code, AI Toolchains, AI IDEs (Cursor/Windsurf/Trae), or Local AI / WSL2 VHDX and produce an actionable cleanup summary without modifying any files.
 ---
 
 # AI Cleaner — Read-Only Disk Diagnostic Skill
@@ -33,12 +33,12 @@ Always pass `--json` (UTF-8 output) and inspect the process exit code:
 # 1. Discover supported zones and installation status
 & $exe --list-zones --json
 
-# 2. Run a full read-only audit across all 5 zones
+# 2. Run a full read-only audit across all 7 zones
 & $exe --dry-run --json
 
 # 3. Audit a single zone by slug:
-#    antigravity | gpt-codex | deepseek-harness | claude-code | ai-toolchains
-& $exe --dry-run --json --zone ai-toolchains
+#    antigravity | gpt-codex | deepseek-harness | claude-code | ai-toolchains | ai-ides | local-ai-ecosystem
+& $exe --dry-run --json --zone ai-ides
 
 # 4. Optional: write JSON directly to a file (useful when stdout is captured elsewhere)
 & $exe --dry-run --json --output "$env:TEMP\ai-cleaner-audit.json"

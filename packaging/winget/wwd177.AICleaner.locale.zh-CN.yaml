@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.locale.1.6.0.schema.json
+
+PackageIdentifier: wwd177.AICleaner
+PackageVersion: 3.2.0
+PackageLocale: zh-CN
+Publisher: wwd177
+PublisherUrl: https://github.com/wwd177/ai-cleaner
+PackageName: AI 清理助手
+PackageUrl: https://github.com/wwd177/ai-cleaner
+License: MIT
+LicenseUrl: https://github.com/wwd177/ai-cleaner/blob/main/LICENSE
+ShortDescription: 面向 Windows 的跨平台 AI 生态安全清理与只读空间诊断工具（覆盖 Antigravity、Codex、DSH、Claude Code、AI IDE、工具链与 WSL2 虚拟盘）。
+ManifestType: locale
+ManifestVersion: 1.6.0

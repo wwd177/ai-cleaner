@@ -30,6 +30,8 @@ public static class ZoneScanner
                 ZoneId.DeepSeekHarness => ScanDeepSeekHarness(settings, proc, ct),
                 ZoneId.ClaudeCode => ScanClaudeCode(proc, ct),
                 ZoneId.AiToolchains => ScanAiToolchains(settings, proc, ct),
+                ZoneId.AiIdes => ScanAiIdes(proc, ct),
+                ZoneId.LocalAiEcosystem => ScanLocalAiEcosystem(settings, proc, ct),
                 _ => new ZoneScanReport { Zone = zone, ProcessInfo = proc }
             };
             sw.Stop();
@@ -1012,6 +1014,367 @@ public static class ZoneScanner
             .ThenByDescending(c => c.SizeBytes)
             .ToList();
         return report;
+    }
+
+    // === ZONE 6: AI IDEs (Cursor / Windsurf / Trae — Per-IDE Process Locking + Verified Top-Level Electron Caches + O(1) state.vscdb) ===
+    private static ZoneScanReport ScanAiIdes(ZoneProcessInfo proc, CancellationToken ct)
+    {
+        var report = new ZoneScanReport { Zone = ZoneId.AiIdes, ProcessInfo = proc };
+        var list = report.Candidates;
+
+        var ideSpecs = new (string Name, string RoamingDir, string ProcName)[]
+        {
+            ("Cursor", Path.Combine(Roaming, "Cursor"), "Cursor"),
+            ("Windsurf", Path.Combine(Roaming, "Windsurf"), "Windsurf"),
+            ("Trae", Path.Combine(Roaming, "Trae"), "Trae")
+        };
+
+        // Strictly verified top-level Electron cache directories ONLY (NEVER touches User/, extensions/, CachedExtensionVSIXs, Network, Local Storage!)
+        string[] safeElectronSubdirs =
+        {
+            "Cache", "CachedData", "Code Cache", "GPUCache", "GrShaderCache", "ShaderCache",
+            "DawnGraphiteCache", "DawnWebGPUCache", "blob_storage",
+            @"Service Worker\CacheStorage", @"Crashpad\reports", @"Crashpad\pending"
+        };
+
+        foreach (var ide in ideSpecs)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!Directory.Exists(ide.RoamingDir)) continue;
+            if (SafetyGuard.HasReparsePointInChain(ide.RoamingDir))
+            {
+                list.Add(new CleanCandidate
+                {
+                    Zone = ZoneId.AiIdes,
+                    Tier = CleanTier.ProtectedSkipped,
+                    ActionType = CleanActionType.None,
+                    IsReadOnlyDiagnostic = true,
+                    Title = $"{ide.Name} 数据目录（NTFS 联接跳过）",
+                    Category = "联接保护",
+                    Path = ide.RoamingDir,
+                    SizeBytes = 0,
+                    JunctionCount = 1,
+                    CanSelect = false,
+                    Reason = "检测到该 IDE 根目录或其祖先链包含 NTFS 目录联接，已安全跳过"
+                });
+                continue;
+            }
+
+            bool thisIdeRunning = proc.RunningProcesses.Any(p => p.Equals(ide.ProcName, StringComparison.OrdinalIgnoreCase));
+
+            // 1. Offline Cache (per-IDE lock so running Cursor never blocks cleaning exited Windsurf!)
+            foreach (var sub in safeElectronSubdirs)
+            {
+                ct.ThrowIfCancellationRequested();
+                string full = Path.Combine(ide.RoamingDir, sub);
+                if (!Directory.Exists(full) || SafetyGuard.HasReparsePointInChain(full)) continue;
+                var sw = SafetyGuard.SweepFiles(full, minAgeDays: 0, doApply: false, pruneEmptySubdirs: false, ct);
+                report.AccessDeniedCount += sw.AccessDeniedCount;
+                if (sw.EligibleBytes < 1024 * 1024) continue;
+
+                list.Add(new CleanCandidate
+                {
+                    Zone = ZoneId.AiIdes,
+                    Tier = CleanTier.OfflineCache,
+                    ActionType = CleanActionType.OfflineSweepFilesKeepSkeleton,
+                    ProcessOwnerTag = ide.ProcName,
+                    Title = $"{ide.Name} 离线缓存 / {sub}",
+                    Category = "AI IDE 离线缓存",
+                    Path = full,
+                    SizeBytes = sw.EligibleBytes,
+                    FileCount = sw.EligibleFiles,
+                    LockedCount = sw.SkippedLocked,
+                    NewestWriteLocal = sw.NewestEligibleUtc == DateTime.MinValue ? DateTime.MinValue : sw.NewestEligibleUtc.ToLocalTime(),
+                    MinAgeDays = 0,
+                    CanSelect = !thisIdeRunning,
+                    Reason = thisIdeRunning
+                        ? $"{ide.Name} 正在运行，已自动加锁；退出 {ide.Name} 后可安全清理（保留扩展、User 设置与登录态）"
+                        : $"{ide.Name} 已退出，可安全清理渲染/着色器缓存（不删扩展、CachedExtensionVSIXs 与登录态）",
+                    ActionHint = "清理内部缓存文件（保留目录骨架）"
+                });
+            }
+
+            // 2. O(1) Read-Only Diagnostic: User\globalStorage\state.vscdb (+ wal/shm)
+            string globalStorage = Path.Combine(ide.RoamingDir, @"User\globalStorage");
+            string stateDb = Path.Combine(globalStorage, "state.vscdb");
+            if (File.Exists(stateDb) && !SafetyGuard.HasReparsePointInChain(stateDb))
+            {
+                static long SafeLen(string p) { try { return File.Exists(p) ? new FileInfo(p).Length : 0; } catch { return 0; } }
+                long dbBytes = SafeLen(stateDb) + SafeLen(stateDb + "-wal") + SafeLen(stateDb + "-shm") + SafeLen(stateDb + ".backup");
+                if (dbBytes > 0)
+                {
+                    list.Add(new CleanCandidate
+                    {
+                        Zone = ZoneId.AiIdes,
+                        Tier = CleanTier.ProtectedSkipped,
+                        ActionType = CleanActionType.None,
+                        IsReadOnlyDiagnostic = true,
+                        Title = $"{ide.Name} 状态数据库 (User/globalStorage/state.vscdb)",
+                        Category = "SQLite 只读诊断",
+                        Path = globalStorage,
+                        SizeBytes = dbBytes,
+                        FileCount = 1,
+                        NewestWriteLocal = File.GetLastWriteTime(stateDb),
+                        CanSelect = false,
+                        Reason = "只读 O(1) 体积诊断：含 AI 对话索引、工作区状态与插件配置，严禁自动删库；体积过大时建议在 IDE 内清理旧历史",
+                        ActionHint = "仅限只读诊断"
+                    });
+                }
+            }
+
+            // 3. Read-Only Radar: User\workspaceStorage
+            string wsStorage = Path.Combine(ide.RoamingDir, @"User\workspaceStorage");
+            if (Directory.Exists(wsStorage) && !SafetyGuard.HasReparsePointInChain(wsStorage))
+            {
+                var st = SafetyGuard.MeasureDirectory(wsStorage, ct);
+                report.AccessDeniedCount += st.AccessDeniedCount;
+                if (st.TotalBytes > 0)
+                {
+                    list.Add(new CleanCandidate
+                    {
+                        Zone = ZoneId.AiIdes,
+                        Tier = CleanTier.ProtectedSkipped,
+                        ActionType = CleanActionType.None,
+                        IsReadOnlyDiagnostic = true,
+                        Title = $"{ide.Name} 工作区存储 (User/workspaceStorage)",
+                        Category = "工作区只读雷达",
+                        Path = wsStorage,
+                        SizeBytes = st.TotalBytes,
+                        FileCount = st.FileCount,
+                        JunctionCount = st.JunctionCount,
+                        NewestWriteLocal = st.NewestWriteUtc == DateTime.MinValue ? Directory.GetLastWriteTime(wsStorage) : st.NewestWriteUtc.ToLocalTime(),
+                        CanSelect = false,
+                        Reason = "只读盘点：含各项目聊天/索引缓存，可点「空间雷达」按项目体积下钻排查",
+                        ActionHint = "仅限空间雷达只读透视"
+                    });
+                }
+            }
+
+            // 4. Red-Zone protection notice for extensions / CachedExtensionVSIXs
+            AddProtectedInfoItem(list, ZoneId.AiIdes, $"{ide.Name} 核心配置、登录态与扩展 (User / CachedExtensionVSIXs)",
+                Path.Combine(ide.RoamingDir, "User"), "红区硬保护：包含账号、设置、快捷键、扩展与 VSIX 离线缓存，绝不触碰");
+        }
+
+        report.Candidates = list
+            .OrderBy(c => c.Tier)
+            .ThenByDescending(c => c.SizeBytes)
+            .ToList();
+        return report;
+    }
+
+    // === ZONE 7: Local AI Ecosystem, WSL2/Docker VHDX & Read-Only Community Packs (Strictly Read-Only — ZERO Deletions!) ===
+    private static ZoneScanReport ScanLocalAiEcosystem(CleanerSettings settings, ZoneProcessInfo proc, CancellationToken ct)
+    {
+        var report = new ZoneScanReport { Zone = ZoneId.LocalAiEcosystem, ProcessInfo = proc };
+        var list = report.Candidates;
+
+        void AddLocalRadarDir(string title, string category, string path, string reason)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!Directory.Exists(path)) return;
+            if (SafetyGuard.HasReparsePointInChain(path))
+            {
+                list.Add(new CleanCandidate
+                {
+                    Zone = ZoneId.LocalAiEcosystem,
+                    Tier = CleanTier.ProtectedSkipped,
+                    ActionType = CleanActionType.None,
+                    IsReadOnlyDiagnostic = true,
+                    Title = $"{title}（联接跳过）",
+                    Category = category,
+                    Path = path,
+                    SizeBytes = 0,
+                    JunctionCount = 1,
+                    CanSelect = false,
+                    Reason = "目录或其祖先链包含 NTFS 目录联接，仅记录不穿越",
+                    ActionHint = "只读雷达"
+                });
+                return;
+            }
+            var st = SafetyGuard.MeasureDirectory(path, ct);
+            report.AccessDeniedCount += st.AccessDeniedCount;
+            if (st.TotalBytes <= 0 && st.FileCount == 0) return;
+            list.Add(new CleanCandidate
+            {
+                Zone = ZoneId.LocalAiEcosystem,
+                Tier = CleanTier.ProtectedSkipped,
+                ActionType = CleanActionType.None,
+                IsReadOnlyDiagnostic = true,
+                Title = title,
+                Category = category,
+                Path = path,
+                SizeBytes = st.TotalBytes,
+                FileCount = st.FileCount,
+                JunctionCount = st.JunctionCount,
+                NewestWriteLocal = st.NewestWriteUtc == DateTime.MinValue ? Directory.GetLastWriteTime(path) : st.NewestWriteUtc.ToLocalTime(),
+                CanSelect = false,
+                Reason = reason,
+                ActionHint = "严格只读诊断（0 自动删除）"
+            });
+        }
+
+        // 1. Cline / Roo Code / Continue agent plugin data across VS Code & AI IDEs
+        var ideGlobalStorageParents = new (string HostName, string GlobalStoragePath)[]
+        {
+            ("VS Code", Path.Combine(Roaming, @"Code\User\globalStorage")),
+            ("Cursor", Path.Combine(Roaming, @"Cursor\User\globalStorage")),
+            ("Windsurf", Path.Combine(Roaming, @"Windsurf\User\globalStorage")),
+            ("Trae", Path.Combine(Roaming, @"Trae\User\globalStorage"))
+        };
+
+        foreach (var (hostName, gs) in ideGlobalStorageParents)
+        {
+            if (!Directory.Exists(gs) || SafetyGuard.HasReparsePointInChain(gs)) continue;
+
+            AddLocalRadarDir($"Cline 任务历史 ({hostName})", "AI 插件只读雷达",
+                Path.Combine(gs, "saoudrizwan.claude-dev"),
+                "只读盘点：Cline 历史任务快照与截图占用，建议在插件历史面板按需清理");
+            AddLocalRadarDir($"Roo Code 任务历史 ({hostName})", "AI 插件只读雷达",
+                Path.Combine(gs, "rooveterinaryinc.roo-cline"),
+                "只读盘点：Roo Code 任务记录与检查点，严禁直接删目录；可用「空间雷达」查看明细");
+        }
+        AddLocalRadarDir(@"Continue 本地索引与配置 (.continue)", "AI 插件只读雷达",
+            Path.Combine(UserHome, ".continue"),
+            "只读盘点：含代码库向量索引与历史对话，严禁自动删除");
+
+        // 2. WSL2 & Docker Desktop ext4.vhdx virtual disk bloat O(1) audit
+        var vhdxRoots = new[]
+        {
+            Path.Combine(LocalApp, @"Docker\wsl"),
+            Path.Combine(LocalApp, "wsl"),
+            Path.Combine(LocalApp, "Packages")
+        };
+        list.AddRange(ScanVhdxFiles(vhdxRoots, ct));
+
+        // 3. ComfyUI local assets (models / output — read-only!)
+        var comfyCandidates = new List<string>
+        {
+            Path.Combine(UserHome, "ComfyUI"),
+            Path.Combine(LocalApp, @"Programs\@comfyorgcomfyui-electron")
+        };
+        foreach (var ws in settings.ExtraWorkspaceRoots)
+        {
+            if (SafetyGuard.ValidateCustomRootPath(ws, out _) && Directory.Exists(ws))
+                comfyCandidates.Add(Path.Combine(ws, "ComfyUI"));
+        }
+        foreach (var cRoot in comfyCandidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!Directory.Exists(cRoot) || SafetyGuard.HasReparsePointInChain(cRoot)) continue;
+            AddLocalRadarDir($"ComfyUI 模型库 ({Path.GetFileName(cRoot)}/models)", "本地生成式 AI 雷达",
+                Path.Combine(cRoot, "models"),
+                "只读盘点：Checkpoint / LoRA / VAE 权重文件，严禁自动删除；点「空间雷达」查看大权重");
+            AddLocalRadarDir($"ComfyUI 输出图库 ({Path.GetFileName(cRoot)}/output)", "本地生成式 AI 雷达",
+                Path.Combine(cRoot, "output"),
+                "只读盘点：历史生成图像/视频作品，严禁自动删除");
+        }
+
+        // 4. Controlled Read-Only Community Diagnostic Packs (%LOCALAPPDATA%\AICleaner\packs & app\packs)
+        var packItems = DiagnosticPackLoader.ScanInstalledPacks(out int packDenied, ct);
+        report.AccessDeniedCount += packDenied;
+        list.AddRange(packItems);
+
+        report.Candidates = list
+            .OrderByDescending(c => c.SizeBytes)
+            .ThenBy(c => c.Title, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return report;
+    }
+
+    /// <summary>Testable O(1) shallow scanner for WSL2 / Docker Desktop .vhdx virtual disk files (never follows junctions, strictly read-only).</summary>
+    public static List<CleanCandidate> ScanVhdxFiles(IEnumerable<string> roots, CancellationToken ct = default)
+    {
+        var found = new List<CleanCandidate>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var root in roots)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root) || SafetyGuard.HasReparsePointInChain(root))
+                continue;
+
+            bool isPackagesRoot = Path.GetFileName(root.TrimEnd('\\', '/')).Equals("Packages", StringComparison.OrdinalIgnoreCase);
+            if (isPackagesRoot)
+            {
+                try
+                {
+                    foreach (var pkg in new DirectoryInfo(root).EnumerateDirectories())
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        if (SafetyGuard.IsReparsePoint(pkg)) continue;
+                        string ls = Path.Combine(pkg.FullName, "LocalState");
+                        if (!Directory.Exists(ls) || SafetyGuard.IsReparsePoint(ls)) continue;
+                        AddVhdxDirectFiles(ls, $"WSL2 虚拟磁盘 ({pkg.Name})", found, seen);
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch { }
+                continue;
+            }
+
+            var queue = new Queue<(string Dir, int Depth)>();
+            queue.Enqueue((root, 0));
+            while (queue.Count > 0)
+            {
+                ct.ThrowIfCancellationRequested();
+                var (curr, depth) = queue.Dequeue();
+                if (depth > 3) continue;
+                if (SafetyGuard.IsReparsePoint(curr)) continue;
+
+                string labelPrefix = curr.Contains("Docker", StringComparison.OrdinalIgnoreCase)
+                    ? "Docker Desktop 虚拟磁盘"
+                    : "WSL2 虚拟磁盘";
+                AddVhdxDirectFiles(curr, labelPrefix, found, seen);
+
+                if (depth < 3)
+                {
+                    try
+                    {
+                        foreach (var sub in new DirectoryInfo(curr).EnumerateDirectories())
+                        {
+                            ct.ThrowIfCancellationRequested();
+                            if (!SafetyGuard.IsReparsePoint(sub))
+                                queue.Enqueue((sub.FullName, depth + 1));
+                        }
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch { }
+                }
+            }
+        }
+        return found;
+    }
+
+    private static void AddVhdxDirectFiles(string dir, string labelPrefix, List<CleanCandidate> dest, HashSet<string> seen)
+    {
+        try
+        {
+            foreach (var fi in new DirectoryInfo(dir).EnumerateFiles("*.vhdx"))
+            {
+                if (SafetyGuard.IsReparsePoint(fi)) continue;
+                string norm = SafetyGuard.NormalizePath(fi.FullName);
+                if (string.IsNullOrEmpty(norm) || !seen.Add(norm)) continue;
+                if (fi.Length <= 0) continue;
+
+                string parentName = Path.GetFileName(dir.TrimEnd('\\', '/'));
+                dest.Add(new CleanCandidate
+                {
+                    Zone = ZoneId.LocalAiEcosystem,
+                    Tier = CleanTier.ProtectedSkipped,
+                    ActionType = CleanActionType.None,
+                    IsReadOnlyDiagnostic = true,
+                    Title = $"{labelPrefix} ({parentName}/{fi.Name})",
+                    Category = "WSL2 / Docker 虚拟盘",
+                    Path = fi.FullName,
+                    SizeBytes = fi.Length,
+                    FileCount = 1,
+                    NewestWriteLocal = fi.LastWriteTime,
+                    CanSelect = false,
+                    Reason = "严格只读诊断：展示文件逻辑大小（稀疏虚拟盘实际占用可能更小，不计入可释放量）；安全压缩步骤：先在终端运行 wsl --shutdown，再执行 Optimize-VHD -Mode Full 或 diskpart compact vdisk（绝不直接删文件！）",
+                    ActionHint = "只读虚拟盘巡检（绝不删除）"
+                });
+            }
+        }
+        catch { }
     }
 
     private static void AddOnlineSweepCandidate(

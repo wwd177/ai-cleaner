@@ -8,11 +8,11 @@ Because this tool handles developer workspaces, AI conversation histories, and l
 
 ## 1. Engine-Authorized Rules Policy
 
-AI Cleaner intentionally does **not** support user-supplied or third-party external JSON deletion rules. Every cleanable target must be:
+AI Cleaner intentionally does **not** support user-supplied or third-party external JSON **deletion** rules. Every cleanable target must be:
 
 1. **Compiled and code-reviewed** inside `src/ZoneCatalog.cs`, `src/ZoneScanner.cs`, and `src/SafetyGuard.cs`.
 2. **Paired with explicit redlines** in `SafetyGuard` protecting credentials, conversation databases, edit rollback history, runtime binaries, and NTFS junctions.
-3. **Defaulting to Read-Only Diagnostic first**: When adding a new AI desktop client or CLI tool (e.g. Cursor, Windsurf, Cline, Roo Code, Zed), start with `IsReadOnlyZone = true` (0 deletable candidates) until its storage layout, lock behavior, and rollback files are thoroughly verified.
+3. **Defaulting to Read-Only Diagnostic first**: When adding a new AI desktop client or CLI tool, start with `IsReadOnlyZone = true` (0 deletable candidates) — or contribute a **controlled read-only community diagnostic pack** under `packs/` (`mode: "read-only"`, see `packs/README.md`).
 
 ## 2. Hard Safety Requirements for Any New Zone
 

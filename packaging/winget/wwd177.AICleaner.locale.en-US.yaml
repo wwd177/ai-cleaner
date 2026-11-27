@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+
+PackageIdentifier: wwd177.AICleaner
+PackageVersion: 3.2.0
+PackageLocale: en-US
+Publisher: wwd177
+PublisherUrl: https://github.com/wwd177/ai-cleaner
+PublisherSupportUrl: https://github.com/wwd177/ai-cleaner/issues
+PackageName: AI Cleaner
+PackageUrl: https://github.com/wwd177/ai-cleaner
+License: MIT
+LicenseUrl: https://github.com/wwd177/ai-cleaner/blob/main/LICENSE
+ShortDescription: Safe Windows AI ecosystem disk cleaner and read-only space radar for AI tools, IDEs, and local models.
+Tags:
+  - ai
+  - cleaner
+  - disk-usage
+  - wpf
+  - developer-tools
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

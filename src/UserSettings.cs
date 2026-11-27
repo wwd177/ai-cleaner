@@ -9,6 +9,9 @@ public sealed class CleanerSettings
     public int TempMinAgeDays { get; set; } = 3;
     public int WorkspaceMinSizeMB { get; set; } = 200;
     public int WorkspaceMinAgeDays { get; set; } = 7;
+    public string UiLanguage { get; set; } = "zh-CN";
+    public bool EnableTrayLowSpaceAlert { get; set; } = false;
+    public int LowSpaceAlertThresholdGB { get; set; } = 30;
     public string CustomCodexCacheRoot { get; set; } = "";
     public List<string> ExtraWorkspaceRoots { get; set; } = new();
     public List<string> ExtraProtectedSubtrees { get; set; } = new();
@@ -20,6 +23,9 @@ public sealed class CleanerSettings
         TempMinAgeDays = TempMinAgeDays,
         WorkspaceMinSizeMB = WorkspaceMinSizeMB,
         WorkspaceMinAgeDays = WorkspaceMinAgeDays,
+        UiLanguage = UiLanguage,
+        EnableTrayLowSpaceAlert = EnableTrayLowSpaceAlert,
+        LowSpaceAlertThresholdGB = LowSpaceAlertThresholdGB,
         CustomCodexCacheRoot = CustomCodexCacheRoot,
         ExtraWorkspaceRoots = new List<string>(ExtraWorkspaceRoots),
         ExtraProtectedSubtrees = new List<string>(ExtraProtectedSubtrees),
@@ -80,6 +86,9 @@ public static class SettingsStore
         TempMinAgeDays = Math.Clamp(input.TempMinAgeDays, 1, 90),
         WorkspaceMinSizeMB = Math.Clamp(input.WorkspaceMinSizeMB, 20, 5000),
         WorkspaceMinAgeDays = Math.Clamp(input.WorkspaceMinAgeDays, 3, 180),
+        UiLanguage = Loc.NormalizeLanguage(input.UiLanguage),
+        EnableTrayLowSpaceAlert = input.EnableTrayLowSpaceAlert,
+        LowSpaceAlertThresholdGB = Math.Clamp(input.LowSpaceAlertThresholdGB, 5, 200),
         CustomCodexCacheRoot = (input.CustomCodexCacheRoot ?? "").Trim(),
         ExtraWorkspaceRoots = CleanPathList(input.ExtraWorkspaceRoots),
         ExtraProtectedSubtrees = CleanPathList(input.ExtraProtectedSubtrees),

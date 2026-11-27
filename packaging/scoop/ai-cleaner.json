@@ -1,0 +1,34 @@
+{
+    "version": "3.2.0",
+    "description": "Safe Windows AI ecosystem disk cleaner & space diagnostic radar (Antigravity, GPT/Codex, DeepSeek Harness, Claude Code, AI IDEs, Toolchains & WSL2/VHDX).",
+    "homepage": "https://github.com/wwd177/ai-cleaner",
+    "license": "MIT",
+    "notes": [
+        "Requires .NET 10 Windows Desktop Runtime (https://dotnet.microsoft.com/download/dotnet/10.0).",
+        "Read-only CLI available via: AICleaner.exe --list-zones --json | --dry-run --json"
+    ],
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/wwd177/ai-cleaner/releases/download/v3.2.0/AICleaner-win-x64.zip",
+            "hash": "REPLACE_WITH_RELEASE_SHA256_USING_UPDATE_SCRIPT"
+        }
+    },
+    "bin": "AICleaner.exe",
+    "shortcuts": [
+        [
+            "AICleaner.exe",
+            "AI Cleaner"
+        ]
+    ],
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/wwd177/ai-cleaner/releases/download/v$version/AICleaner-win-x64.zip",
+                "hash": {
+                    "url": "$baseurl/SHA256SUMS.txt"
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "1.0",
+  "packId": "community-ai-radar",
+  "name": "Community AI Radar (Read-Only)",
+  "mode": "read-only",
+  "author": "ai-cleaner-community",
+  "entries": [
+    {
+      "id": "zed-ai-cache",
+      "title": "Zed Editor Local Data & AI Cache (AppData\\Local\\Zed)",
+      "category": "Community Read-Only Radar",
+      "pathTemplate": "%LOCALAPPDATA%\\Zed",
+      "hint": "Read-only disk audit for Zed editor & AI assistant caches. Use Space Radar to inspect before manual cleanup."
+    },
+    {
+      "id": "aider-cache",
+      "title": "Aider Local Cache & Repo Maps (~\\.aider)",
+      "category": "Community Read-Only Radar",
+      "pathTemplate": "%USERPROFILE%\\.aider",
+      "hint": "Read-only disk audit for Aider caches and tag indexes (never auto-deleted)."
+    },
+    {
+      "id": "jan-ai-models",
+      "title": "Jan AI Local Models & Threads (~\\jan)",
+      "category": "Local Model Radar",
+      "pathTemplate": "%USERPROFILE%\\jan",
+      "hint": "Read-only disk audit for Jan local LLM weights and conversation storage. Manage models inside Jan."
+    },
+    {
+      "id": "gpt4all-models",
+      "title": "GPT4All Local Models (AppData\\Local\\nomic.ai\\GPT4All)",
+      "category": "Local Model Radar",
+      "pathTemplate": "%LOCALAPPDATA%\\nomic.ai\\GPT4All",
+      "hint": "Read-only disk audit for GPT4All downloaded GGUF models."
+    },
+    {
+      "id": "openhands-state",
+      "title": "OpenHands Local Cache & State (~\\.openhands)",
+      "category": "Community Read-Only Radar",
+      "pathTemplate": "%USERPROFILE%\\.openhands",
+      "hint": "Read-only disk audit for OpenHands local session artifacts."
+    }
+  ]
+}
