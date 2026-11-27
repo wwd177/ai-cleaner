@@ -51,11 +51,11 @@ jobs:
           }
           Write-Host "Privacy path guard passed across $($files.Count) files (0 hits)."
 
-      - name: Validate PowerShell scripts syntax
+      - name: Validate PowerShell scripts and JSON manifests
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $scripts = Get-ChildItem -Path ".\scripts" -Filter "*.ps1" -Recurse -File
+          $scripts = Get-ChildItem -Path ".\scripts", ".\packaging" -Filter "*.ps1" -Recurse -File -ErrorAction SilentlyContinue
           foreach ($s in $scripts) {
             $tokens = $null
             $errors = $null
@@ -67,6 +67,12 @@ jobs:
               exit 1
             }
             Write-Host "Parsed OK: $($s.Name)"
+          }
+          foreach ($jf in @('.\packs\community-ai-radar.example.json', '.\packaging\scoop\ai-cleaner.json', '.\settings.example.json')) {
+            if (Test-Path -LiteralPath $jf) {
+              $null = Get-Content -LiteralPath $jf -Raw -Encoding UTF8 | ConvertFrom-Json
+              Write-Host "JSON OK: $jf"
+            }
           }
 
       - name: Setup .NET 10 SDK
@@ -86,12 +92,15 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Path .\dist\pkg\skills\ai-cleaner -Force | Out-Null
+          New-Item -ItemType Directory -Path .\dist\pkg\packs -Force | Out-Null
           Copy-Item .\dist\staging\AICleaner.exe .\dist\pkg\AICleaner.exe
           Copy-Item .\settings.example.json .\dist\pkg\settings.example.json
           Copy-Item .\README.md .\dist\pkg\README.md
           Copy-Item .\README.en.md .\dist\pkg\README.en.md
           Copy-Item .\LICENSE .\dist\pkg\LICENSE
           Copy-Item .\skills\ai-cleaner\SKILL.md .\dist\pkg\skills\ai-cleaner\SKILL.md
+          Copy-Item .\packs\community-ai-radar.example.json .\dist\pkg\packs\community-ai-radar.example.json
+          Copy-Item .\packs\README.md .\dist\pkg\packs\README.md
 
           New-Item -ItemType Directory -Path .\dist\release -Force | Out-Null
           $zipPath = (Resolve-Path .\dist\release).Path + "\AICleaner-win-x64.zip"
@@ -101,7 +110,7 @@ jobs:
           "$hash  AICleaner-win-x64.zip" | Set-Content -LiteralPath .\dist\release\SHA256SUMS.txt -Encoding ASCII -NoNewline
           Write-Host "Packaged: $zipPath ($hash)"
 
-      - name: Verify extracted release ZIP (--self-test & non-empty CLI JSON fixtures)
+      - name: Verify extracted release ZIP (--self-test & 7-zone CLI JSON fixtures)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -128,7 +137,6 @@ jobs:
             $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
             $proc = [System.Diagnostics.Process]::Start($psi)
             try {
-              # Concurrent async stream reads prevent stdout/stderr buffer deadlocks
               $outTask = $proc.StandardOutput.ReadToEndAsync()
               $errTask = $proc.StandardError.ReadToEndAsync()
               if (-not $proc.WaitForExit($TimeoutMs)) {
@@ -155,16 +163,19 @@ jobs:
             throw "Self-test failed (ExitCode=$($st.ExitCode))"
           }
 
-          Write-Host "--- 2. Verifying --list-zones --json ---"
+          Write-Host "--- 2. Verifying --list-zones --json (exact 7-zone slug set) ---"
           $lz = Invoke-CliCaptured @("--list-zones", "--json")
           if ($lz.ExitCode -ne 0) { throw "--list-zones failed: ExitCode=$($lz.ExitCode) StdErr=$($lz.StdErr)" }
           $lzObj = $lz.StdOut | ConvertFrom-Json
-          if ($lzObj.schemaVersion -ne "1.0" -or $lzObj.zones.Count -ne 5) {
-            throw "Unexpected --list-zones payload: schema=$($lzObj.schemaVersion) count=$($lzObj.zones.Count)"
+          $expectedSlugs = @('antigravity', 'gpt-codex', 'deepseek-harness', 'claude-code', 'ai-toolchains', 'ai-ides', 'local-ai-ecosystem')
+          $actualSlugs = @($lzObj.zones | ForEach-Object { $_.slug })
+          $missing = @($expectedSlugs | Where-Object { $actualSlugs -notcontains $_ })
+          if ($lzObj.schemaVersion -ne "1.0" -or $actualSlugs.Count -ne $expectedSlugs.Count -or $missing.Count -gt 0) {
+            throw "Unexpected --list-zones payload: schema=$($lzObj.schemaVersion) actual=$($actualSlugs -join ',')"
           }
-          Write-Host "Zones verified: $(($lzObj.zones | ForEach-Object { $_.slug }) -join ', ')"
+          Write-Host "All 7 zones verified: $($actualSlugs -join ', ')"
 
-          Write-Host "--- 3. Seeding non-empty Claude Code & AI Toolchains fixtures (mixed read-only + expired safe cache) ---"
+          Write-Host "--- 3. Seeding non-empty Claude Code, AI Toolchains & Local AI fixtures ---"
           $createdRoots = New-Object System.Collections.Generic.List[string]
           $createdFiles = New-Object System.Collections.Generic.List[string]
           $claudeRoot = Join-Path $env:USERPROFILE ".claude"
@@ -173,6 +184,7 @@ jobs:
           $pnpmStore  = Join-Path $env:LOCALAPPDATA "pnpm\store"
           $hfCache    = Join-Path $env:USERPROFILE ".cache\huggingface"
           $uvCache    = Join-Path $env:LOCALAPPDATA "uv\cache"
+          $wslDocker  = Join-Path $env:LOCALAPPDATA "Docker\wsl\disk"
 
           try {
             $payload8k = New-Object byte[] 8192
@@ -202,7 +214,12 @@ jobs:
             [IO.File]::WriteAllBytes($fUv, $payload4k); $createdFiles.Add($fUv)
             [IO.File]::SetLastWriteTimeUtc($fUv, [DateTime]::UtcNow.AddDays(-30))
 
-            # 3A. Claude Code: assert each seeded path individually + 0 reclaimable bytes across the entire zone
+            if (-not (Test-Path $wslDocker)) { $createdRoots.Add((Join-Path $env:LOCALAPPDATA "Docker")) }
+            New-Item -ItemType Directory -Path $wslDocker -Force | Out-Null
+            $fVhdx = Join-Path $wslDocker "ci-ext4.vhdx"
+            [IO.File]::WriteAllBytes($fVhdx, $payload8k); $createdFiles.Add($fVhdx)
+
+            # 3A. Claude Code: strict read-only per-item verification
             $cc = Invoke-CliCaptured @("--dry-run", "--json", "--zone", "claude-code")
             if ($cc.ExitCode -ne 0) { throw "claude-code dry-run failed: ExitCode=$($cc.ExitCode) StdErr=$($cc.StdErr)" }
             $ccObj = $cc.StdOut | ConvertFrom-Json
@@ -216,9 +233,9 @@ jobs:
                 $ccZone.safeOnlineBytes -ne 0 -or $ccZone.recycleCandidateBytes -ne 0 -or $ccZone.offlineCacheBytes -ne 0 -or $ccSelectable -ne 0) {
               throw "Claude Code per-item read-only contract failed!"
             }
-            Write-Host "Claude Code per-item fixture verified (file-history=$($cHist.sizeBytes)B, debug=$($cDbg.sizeBytes)B, selectable=0)."
+            Write-Host "Claude Code per-item fixture verified."
 
-            # 3B. AI Toolchains: assert pnpm/hf are read-only diagnostic AND expired uv cache is independently SafeOnline
+            # 3B. AI Toolchains: mixed read-only radar + expired uv SafeOnline separation
             $tc = Invoke-CliCaptured @("--dry-run", "--json", "--zone", "ai-toolchains")
             if ($tc.ExitCode -ne 0) { throw "ai-toolchains dry-run failed: ExitCode=$($tc.ExitCode) StdErr=$($tc.StdErr)" }
             $tcObj = $tc.StdOut | ConvertFrom-Json
@@ -238,9 +255,22 @@ jobs:
             $expectedDiagSum = ($tcZone.candidates | Where-Object { $_.isReadOnlyDiagnostic -eq $true } | Measure-Object -Property sizeBytes -Sum).Sum
             $expectedSafeSum = ($tcZone.candidates | Where-Object { $_.tier -eq "SafeOnline" -and -not $_.isReadOnlyDiagnostic } | Measure-Object -Property sizeBytes -Sum).Sum
             if ($tcZone.diagnosticBytes -ne $expectedDiagSum -or $tcZone.safeOnlineBytes -ne $expectedSafeSum) {
-              throw "AI Toolchains byte-bucket separation broken! diag=$($tcZone.diagnosticBytes) vs $expectedDiagSum; safe=$($tcZone.safeOnlineBytes) vs $expectedSafeSum"
+              throw "AI Toolchains byte-bucket separation broken!"
             }
-            Write-Host "AI Toolchains mixed fixture verified (pnpm=$($cPnpm.sizeBytes)B RO, hf=$($cHf.sizeBytes)B RO, uv=$($cUv.sizeBytes)B SafeOnline)."
+            Write-Host "AI Toolchains mixed fixture verified."
+
+            # 3C. Local AI Ecosystem / VHDX: strict read-only non-empty VHDX assertion
+            $le = Invoke-CliCaptured @("--dry-run", "--json", "--zone", "local-ai-ecosystem")
+            if ($le.ExitCode -ne 0) { throw "local-ai-ecosystem dry-run failed: ExitCode=$($le.ExitCode) StdErr=$($le.StdErr)" }
+            $leObj = $le.StdOut | ConvertFrom-Json
+            $leZone = $leObj.zones[0]
+            $leSelectable = @($leZone.candidates | Where-Object { $_.canSelect -eq $true }).Count
+            $cVhdx = $leZone.candidates | Where-Object { $_.path -ieq $fVhdx } | Select-Object -First 1
+            if ($leZone.isReadOnlyZone -ne $true -or $null -eq $cVhdx -or -not $cVhdx.isReadOnlyDiagnostic -or
+                $cVhdx.canSelect -or $cVhdx.actionType -ne "None" -or $cVhdx.sizeBytes -lt 8192 -or $leSelectable -ne 0) {
+              throw "Local AI / VHDX read-only contract failed!"
+            }
+            Write-Host "Local AI / VHDX fixture verified ($($cVhdx.sizeBytes)B read-only)."
           } finally {
             foreach ($f in $createdFiles) {
               if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
